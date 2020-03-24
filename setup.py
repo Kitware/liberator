@@ -1,13 +1,5 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""
-Installation:
-    pip install git+https://github.com/Erotemic/liberator.git
-
-Developing:
-    git clone https://github.com/Erotemic/liberator.git
-    pip install -e liberator
-"""
 import sys
 from os.path import exists
 
@@ -183,8 +175,7 @@ if __name__ == '__main__':
         name=NAME,
         version=VERSION,
         author='Jon Crall',
-        description=('A Python utility belt containing simple tools, '
-                     'a stdlib like feel, and extra batteries.'),
+        description=('static code extractor for Python'),
         long_description=parse_description(),
         long_description_content_type='text/x-rst',
         install_requires=parse_requirements('requirements/runtime.txt'),
@@ -193,8 +184,8 @@ if __name__ == '__main__':
             'tests': parse_requirements('requirements/tests.txt'),
             'optional': parse_requirements('requirements/optional.txt'),
         },
-        author_email='erotemic@gmail.com',
-        url='https://github.com/Erotemic/liberator',
+        author_email='jon.crall@kitware.com',
+        url='https://gitlab.kitware.com/python/liberator',
         license='Apache 2',
         packages=find_packages('.'),
         classifiers=[
