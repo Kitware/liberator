@@ -33,3 +33,5 @@ then recursively parsing and extracting all missing dependencies.
 .. |GitlabCICoverage| image:: https://gitlab.kitware.com/python/liberator/badges/master/coverage.svg?job=coverage
     :target: https://gitlab.kitware.com/python/liberator/commits/master
 
+
+## Version 0.0.2 - Unreleased
