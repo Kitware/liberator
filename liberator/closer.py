@@ -35,7 +35,7 @@ from os.path import sys
 DEBUG = 0
 
 
-class Unparser(astunparse.Unparser):
+class UnparserVariant(astunparse.Unparser):
     """
     wraps astunparse to fix 2/3 compatibility minor issues
 
@@ -52,11 +52,46 @@ class Unparser(astunparse.Unparser):
         # be compatible with python2 if possible
         self.write("Ellipsis")
 
+    def _Constant(self, tree):
+        # Better support for multiline strings
+        if six.PY3:
+            if not isinstance(tree.value, str):
+                return super()._Constant(tree)
+            if tree.lineno != tree.end_lineno:
+                # heuristic for tripple quote strings
+
+                candidates = [
+                    '"""\n' + ub.indent(tree.s + '\n"""', ' ' * tree.col_offset),
+                    'r"""\n' + ub.indent(tree.s + '\n"""', ' ' * tree.col_offset),
+                    "'''\n" + ub.indent(tree.s + "\n'''", ' ' * tree.col_offset),
+                    "r'''\n" + ub.indent(tree.s + "\n'''", ' ' * tree.col_offset),
+                ]
+                found = None
+                for cand in candidates:
+                    try:
+                        ast.literal_eval(cand)
+                        # if  != tree.s.strip():
+                        #    raise Exception
+                    except Exception:
+                        pass
+                    else:
+                        found = cand
+                        break
+
+                if found:
+                    self.write(cand)
+                else:
+                    self.write(repr(tree.s))
+            else:
+                self.write(repr(tree.s))
+        else:
+            super()._Constant(tree)
+
 
 def unparse(tree):
     """ wraps astunparse to fix 2/3 compatibility minor issues """
     v = cStringIO()
-    Unparser(tree, file=v)
+    UnparserVariant(tree, file=v)
     return v.getvalue()
 
 
@@ -179,7 +214,6 @@ class Closer(ub.NiceRepr):
 
     Ignore:
         >>> from liberator.closer import *
-        >>> import netharn as nh
         >>> import fastai.vision
         >>> obj = fastai.vision.models.WideResNet
         >>> expand_names = ['fastai']
@@ -187,6 +221,14 @@ class Closer(ub.NiceRepr):
         >>> closer.add_dynamic(obj)
         >>> closer.expand(expand_names)
         >>> #print(ub.repr2(closer.body_defs, si=1))
+        >>> print(closer.current_sourcecode())
+
+    Ignore:
+        >>> from liberator.closer import Closer
+        >>> from fastai.vision.models import unet
+        >>> closer = Closer()
+        >>> closer.add_dynamic(unet.DynamicUnet)
+        >>> closer.expand(['fastai'])
         >>> print(closer.current_sourcecode())
 
     Ignore:
@@ -210,8 +252,13 @@ class Closer(ub.NiceRepr):
         closer.logs = []
         closer._log_indent = ''
 
+        closer._lazy_visitors = []
+
     def debug(closer, msg):
         closer.logs.append(closer._log_indent + msg)
+
+    def _print_logs(closer):
+        print('\n'.join(closer.logs))
 
     def __nice__(self):
         return self.tag
@@ -238,38 +285,130 @@ class Closer(ub.NiceRepr):
         current_sourcecode += '\n\n\n'.join(body_lines)
         return current_sourcecode
 
-    def add_dynamic(closer, obj):
+    def _ensure_visitor(closer, modpath=None, module=None):
         """
-        Add the source to define a live python object
+        Return an existing visitor for a module or create one if it doesnt
+        exist
         """
-        closer.debug('closer.add_dynamic(obj={!r})'.format(obj))
-        modname = obj.__module__
-        module = sys.modules[modname]
+        if modpath is None and module is not None:
+            modpath = module.__file__
 
-        name = obj.__name__
-
-        modpath = module.__file__
         if modpath not in closer.visitors:
             visitor = ImportVisitor.parse(module=module, modpath=modpath)
             closer.visitors[modpath] = visitor
         visitor = closer.visitors[modpath]
+        return visitor
+
+    def add_dynamic(closer, obj, eager=True):
+        """
+        Add the source to define a live python object
+
+        Args:
+            obj (object): a reference to a class or function
+
+            eager (bool): experimental
+        """
+        closer.debug('closer.add_dynamic(obj={!r})'.format(obj))
+        name = obj.__name__
+        modname = obj.__module__
+        module = sys.modules[modname]
+
+        visitor = closer._ensure_visitor(module=module)
 
         d = visitor.extract_definition(name)
+
         closer._add_definition(d)
-        closer.close(visitor)
+
+        if eager:
+            closer.close(visitor)
+        else:
+            # Experimental
+            closer._lazy_visitors.append(visitor)
 
     def add_static(closer, name, modpath):
         # print('ADD_STATIC name = {} from {}'.format(name, modpath))
         closer.debug('closer.add_static(name={!r}, modpath={!r})'.format(name, modpath))
-        if modpath not in closer.visitors:
-            visitor = ImportVisitor.parse(modpath=modpath)
-            closer.visitors[modpath] = visitor
-        visitor = closer.visitors[modpath]
 
+        visitor = closer._ensure_visitor(modpath=modpath)
         d = visitor.extract_definition(name)
-        closer._add_definition(d)
 
+        closer._add_definition(d)
         closer.close(visitor)
+
+    def _lazy_close(closer):
+        # Experimental
+        closer.close2(ub.oset(closer._lazy_visitors))
+        closer._lazy_visitors = []
+
+    def close2(closer, visitors):
+        """
+        Experimental
+
+        Populate all undefined names using the context from a module
+        """
+        # Parse the parent module to find only the relevant global varaibles and
+        # include those in the extracted source code.
+        closer.debug('closing')
+        current_sourcecode = closer.current_sourcecode()
+
+        # Loop until all undefined names are defined
+        names = True
+        while names:
+            # Determine if there are any variables needed from the parent scope
+            current_sourcecode = closer.current_sourcecode()
+            # Make sure we process names in the same order for hashability
+            prev_names = names
+            names = sorted(undefined_names(current_sourcecode))
+            closer.debug(' * undefined_names = {}'.format(names))
+            if names == prev_names:
+                for visitor in visitors:
+                    print('visitor.definitions = {}'.format(ub.repr2(visitor.definitions, si=1)))
+                if DEBUG:
+                    warnings.warn('We were unable do do anything about undefined names')
+                    return
+                else:
+                    current_sourcecode = closer.current_sourcecode()
+                    print('--- <ERROR> ---')
+                    print('Unable to define names')
+                    print(' * names = {!r}'.format(names))
+                    print('<<< CURRENT_SOURCE >>>\n{}\n<<<>>>'.format(ub.highlight_code(current_sourcecode)))
+                    print('--- </ERROR> ---')
+                    raise AssertionError('unable to define names: {}'.format(names))
+            for name in names:
+                try:
+                    # Greedilly choose the visitor that has the name we are
+                    # looking for.
+                    for visitor in visitors:
+                        if name in visitor.definitions:
+                            break
+                    try:
+                        closer.debug(' * try visitor.extract_definition({})'.format(names))
+                        d = visitor.extract_definition(name)
+                    except KeyError as ex:
+                        closer.debug(' * encountered issue: {!r}'.format(ex))
+                        # There is a corner case where we have the definition,
+                        # we just need to move it to the top.
+                        flag = False
+                        for d_ in closer.body_defs.values():
+                            if name == d_.name:
+                                closer.debug(' * corner case: move definition to top')
+                                closer._add_definition(d_)
+                                flag = True
+                                break
+                        if not flag:
+                            raise
+                    else:
+                        closer.debug(' * add extracted def {}'.format(name))
+                        closer._add_definition(d)
+                        # type_, text = visitor.extract_definition(name)
+                except Exception as ex:
+                    closer.debug(' * unable to extracted def {} due to {!r}'.format(name, ex))
+                    current_sourcecode = closer.current_sourcecode()
+                    print('--- <ERROR> ---')
+                    print('Error computing source code extract_definition')
+                    print(' * failed to close name = {!r}'.format(name))
+                    # print('<<< CURRENT_SOURCE >>>\n{}\n<<<>>>'.format(ub.highlight_code(current_sourcecode)))
+                    print('--- </ERROR> ---')
 
     def close(closer, visitor):
         """
@@ -652,6 +791,12 @@ class Definition(ub.NiceRepr):
     @property
     def code(self):
         if self._code is None:
+            # NOTE: the unparse variant captures decorators whereas the dynamic
+            # inspect variant does not seem to do that.
+            #
+            # In general the inspect.getsource seems to return the same
+            # formatting as the original module, but the unparse
+            # is more accurate.
             try:
                 if self._expanded or self.type == 'Assign':
                     # always use astunparse if we have expanded
@@ -709,6 +854,34 @@ class ImportVisitor(ast.NodeVisitor, ub.NiceRepr):
         ...     ''')
         >>> visitor = ImportVisitor.parse(source=sourcecode, modpath=modpath)
         >>> print(ub.repr2(visitor.definitions, si=1))
+
+    Example:
+        >>> from liberator.closer import *
+        >>> from liberator import closer
+        >>> modpath = closer.__file__
+        >>> sourcecode = ub.codeblock(
+                '''
+                def decor(func):
+                        return func
+
+                @decor
+                def foo():
+                    return 'bar'
+        ...     ''')
+        >>> visitor = ImportVisitor.parse(source=sourcecode, modpath=modpath)
+        >>> print(ub.repr2(visitor.definitions, si=1))
+
+    Ignore:
+        >>> import mmdet
+        >>> import liberator
+        >>> closer = liberator.closer.Closer()
+        >>> closer.add_dynamic(mmdet.models.backbones.HRNet)
+        >>> print(closer.current_sourcecode())
+        >>> visitor = ub.peek(closer.visitors.values())
+        >>> print(ub.repr2(visitor.definitions, si=1))
+        >>> d = visitor.definitions['HRNet']
+        >>> print(d.code[0:1000])
+
     """
 
     def __init__(visitor, modpath=None, modname=None, module=None, pt=None):
