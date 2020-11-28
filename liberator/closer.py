@@ -15,6 +15,12 @@ NOTE:
 #     - [ ] what modifications were made to it
 # - [ ] Handle expanding imports nested within functions
 # - [ ] Maintain docstring formatting after using the node transformer
+
+
+ISSUES:
+    - [ ] We currently (0.0.1) get a KeyError in the case where, a module is
+        imported like `import mod.submod` and all usage is of the form
+        `mod.submod.attr`, then
 """
 from __future__ import absolute_import, division, print_function, unicode_literals
 from os.path import isdir
@@ -27,12 +33,529 @@ import astunparse
 import inspect
 import six
 import ubelt as ub
+import copy
 from six.moves import cStringIO
 from os.path import abspath
 from os.path import sys
 
+__all__ = ['Liberator', 'Closer']
 
-DEBUG = 0
+
+class LocalLogger:
+    """
+    A non-global logger used for specific code paths or class instances.
+    """
+    def __init__(self, tag='', verbose=0):
+        self.verbose = verbose
+        self.logs = []
+        self.tag = tag
+        self.indent = ''
+
+    def error(self, msg):
+        line = '[ERROR.{}] '.format(self.tag) + self.indent + msg
+        self.logs.append(line)
+        if self.verbose >= 0:
+            print(line)
+
+    def info(self, msg):
+        line = '[INFO.{}] '.format(self.tag) + self.indent + msg
+        self.logs.append(line)
+        if self.verbose >= 1:
+            print(line)
+
+    def debug(self, msg):
+        line = '[DEBUG.{}] '.format(self.tag) + self.indent + msg
+        self.logs.append(line)
+        if self.verbose >= 2:
+            print(line)
+
+    def _print_logs(self):
+        print('\n'.join(self.logs))
+
+    @classmethod
+    def coerce(cls, item, tag='', verbose=0):
+        """
+        Create logger from another logger
+        """
+        if isinstance(item, int):
+            verbose = item
+
+        self = cls(tag=tag, verbose=verbose)
+
+        if isinstance(item, cls):
+            # Make a sublogger, TODO: be more eloquent
+            self.logs = item.logs
+            self.verbose = item.verbose
+
+        return self
+
+
+class Liberator(ub.NiceRepr):
+    """
+    Maintains the current state of the source code
+
+    There are 3 major steps:
+    (a) extract the code to that defines a function or class from a module,
+    (b) go back to the module and extract extra code required to define any
+        names that were undefined in the extracted code, and
+    (c) replace import statements to specified "expand" modules with the actual code
+        used to define the variables accessed via the imports.
+
+    This results in a standalone file that has absolutely no dependency on the
+    original module or the specified "expand" modules (the expand module is
+    usually the module that is doing the training for a network. This means
+    that you can deploy a model independant of the training framework).
+
+    Note:
+        This is not designed to work for cases where the code depends on logic
+        executed in a global scope (e.g. dynamically registering properties) .
+        I think its actually impossible to statically account for this case in
+        general.
+
+    Ignore:
+        >>> from liberator.closer import *
+        >>> import fastai.vision
+        >>> obj = fastai.vision.models.WideResNet
+        >>> expand_names = ['fastai']
+        >>> lib = Liberator()
+        >>> lib.add_dynamic(obj)
+        >>> lib.expand(expand_names)
+        >>> #print(ub.repr2(lib.body_defs, si=1))
+        >>> print(lib.current_sourcecode())
+
+    Ignore:
+        >>> from liberator.closer import Liberator
+        >>> from fastai.vision.models import unet
+        >>> lib = Liberator()
+        >>> lib.add_dynamic(unet.DynamicUnet)
+        >>> lib.expand(['fastai'])
+        >>> print(lib.current_sourcecode())
+
+    Ignore:
+        >>> from liberator.closer import *
+        >>> import netharn as nh
+        >>> from netharn.models.yolo2 import yolo2
+        >>> obj = yolo2.Yolo2
+        >>> expand_names = ['netharn']
+        >>> lib = Liberator()
+        >>> lib.add_static(obj.__name__, sys.modules[obj.__module__].__file__)
+        >>> lib.expand(expand_names)
+        >>> #print(ub.repr2(lib.body_defs, si=1))
+        >>> print(lib.current_sourcecode())
+    """
+    def __init__(lib, tag='root', logger=None):
+        lib.header_defs = ub.odict()
+        lib.body_defs = ub.odict()
+        lib.visitors = {}
+        lib.logger = LocalLogger.coerce(logger, tag=tag)
+
+        lib._lazy_visitors = []
+
+    def error(lib, msg):
+        lib.logger.error(msg)
+
+    def info(lib, msg):
+        lib.logger.info(msg)
+
+    def debug(lib, msg):
+        lib.logger.debug(msg)
+
+    def _print_logs(lib):
+        lib.logger.print_logs()
+
+    def __nice__(self):
+        return self.tag
+
+    def _add_definition(lib, d):
+        lib.info('_add_definition = {!r}'.format(d))
+        d = copy.deepcopy(d)
+        # print('ADD DEFINITION d = {!r}'.format(d))
+        if 'Import' in d.type:
+            if d.absname in lib.header_defs:
+                del lib.header_defs[d.absname]
+            lib.header_defs[d.absname] = d
+        else:
+            if d.absname in lib.body_defs:
+                del lib.body_defs[d.absname]
+            lib.body_defs[d.absname] = d
+
+    def current_sourcecode(self):
+        header_lines = [d.code for d in self.header_defs.values()]
+        body_lines = [d.code for d in self.body_defs.values()][::-1]
+        current_sourcecode = '\n'.join(header_lines)
+        current_sourcecode += '\n\n\n'
+        current_sourcecode += '\n\n\n'.join(body_lines)
+        return current_sourcecode
+
+    def _ensure_visitor(lib, modpath=None, module=None):
+        """
+        Return an existing visitor for a module or create one if it doesnt
+        exist
+        """
+        if modpath is None and module is not None:
+            modpath = module.__file__
+
+        if modpath not in lib.visitors:
+            visitor = ImportVisitor.parse(module=module, modpath=modpath,
+                                          logger=lib.logger)
+            lib.visitors[modpath] = visitor
+        visitor = lib.visitors[modpath]
+        return visitor
+
+    def add_dynamic(lib, obj, eager=True):
+        """
+        Add the source to define a live python object
+
+        Args:
+            obj (object): a reference to a class or function
+
+            eager (bool): experimental
+        """
+        lib.info('\n\n')
+        lib.info('====\n\n')
+        lib.info('lib.add_dynamic(obj={!r})'.format(obj))
+        name = obj.__name__
+        modname = obj.__module__
+        module = sys.modules[modname]
+
+        visitor = lib._ensure_visitor(module=module)
+
+        d = visitor.extract_definition(name)
+
+        lib._add_definition(d)
+
+        if eager:
+            lib.close(visitor)
+        else:
+            # Experimental
+            lib._lazy_visitors.append(visitor)
+
+    def add_static(lib, name, modpath):
+        # print('ADD_STATIC name = {} from {}'.format(name, modpath))
+        lib.info('lib.add_static(name={!r}, modpath={!r})'.format(name, modpath))
+
+        visitor = lib._ensure_visitor(modpath=modpath)
+        d = visitor.extract_definition(name)
+
+        lib._add_definition(d)
+        lib.close(visitor)
+
+    def _lazy_close(lib):
+        # Experimental
+        lib.close2(ub.oset(lib._lazy_visitors))
+        lib._lazy_visitors = []
+
+    def close2(lib, visitors):
+        """
+        Experimental
+
+        Populate all undefined names using the context from a module
+        """
+        # Parse the parent module to find only the relevant global varaibles and
+        # include those in the extracted source code.
+        lib.info('closing')
+
+        # Loop until all undefined names are defined
+        names = True
+        while names:
+            # Determine if there are any variables needed from the parent scope
+            current_sourcecode = lib.current_sourcecode()
+            # Make sure we process names in the same order for hashability
+            prev_names = names
+            names = sorted(undefined_names(current_sourcecode))
+            lib.info(' * undefined_names = {}'.format(names))
+            if names == prev_names:
+                for visitor in visitors:
+                    lib.info('visitor.definitions = {}'.format(ub.repr2(visitor.definitions, si=1)))
+                if 0:
+                    warnings.warn('We were unable do do anything about undefined names')
+                    return
+                else:
+                    # current_sourcecode = lib.current_sourcecode()
+                    lib.error('--- <ERROR[4]> ---')
+                    lib.error('Unable to define names')
+                    lib.error(' * names = {!r}'.format(names))
+                    #lib.error('<<< CURRENT_SOURCE >>>\n{}\n<<<>>>'.format(ub.highlight_code(current_sourcecode)))
+                    lib.error('--- </ERROR[4]> ---')
+                    raise AssertionError('unable to define names: {}'.format(names))
+            for name in names:
+                try:
+                    # Greedilly choose the visitor that has the name we are
+                    # looking for.
+                    for visitor in visitors:
+                        if name in visitor.definitions:
+                            break
+                    try:
+                        lib.info(' * try visitor.extract_definition({})'.format(name))
+                        d = visitor.extract_definition(name)
+                    except KeyError as ex:
+                        lib.info(' * encountered issue: {!r}'.format(ex))
+                        # There is a corner case where we have the definition,
+                        # we just need to move it to the top.
+                        flag = False
+                        for d_ in lib.body_defs.values():
+                            if name == d_.name:
+                                lib.info(' * corner case: move definition to top')
+                                lib._add_definition(d_)
+                                flag = True
+                                break
+                        if not flag:
+                            raise
+                    else:
+                        lib.info(' * add extracted def {}'.format(name))
+                        lib._add_definition(d)
+                        # type_, text = visitor.extract_definition(name)
+                except Exception as ex:
+                    lib.info(' * unable to extracted def {} due to {!r}'.format(name, ex))
+                    # current_sourcecode = lib.current_sourcecode()
+                    lib.error('--- <ERROR[3]> ---')
+                    lib.error('Error computing source code extract_definition')
+                    lib.error(' * failed to close name = {!r}'.format(name))
+                    # lib.error('<<< CURRENT_SOURCE >>>\n{}\n<<<>>>'.format(ub.highlight_code(current_sourcecode)))
+                    lib.error('--- </ERROR[3]> ---')
+
+    def close(lib, visitor):
+        """
+        Populate all undefined names using the context from a module
+        """
+        # Parse the parent module to find only the relevant global varaibles and
+        # include those in the extracted source code.
+        lib.info('closing')
+
+        # Loop until all undefined names are defined
+        names = True
+        while names:
+            # Determine if there are any variables needed from the parent scope
+            current_sourcecode = lib.current_sourcecode()
+            # Make sure we process names in the same order for hashability
+            prev_names = names
+            names = sorted(undefined_names(current_sourcecode))
+            lib.info(' * undefined_names = {}'.format(names))
+            if names == prev_names:
+                lib.info('visitor.definitions = {}'.format(ub.repr2(visitor.definitions, si=1)))
+                if 0:
+                    warnings.warn('We were unable do do anything about undefined names')
+                    return
+                else:
+                    # current_sourcecode = lib.current_sourcecode()
+                    lib.error('--- <ERROR[1]> ---')
+                    lib.error('Unable to define names')
+                    lib.error(' * names = {!r}'.format(names))
+                    #lib.error('<<< CURRENT_SOURCE >>>\n{}\n<<<>>>'.format(ub.highlight_code(current_sourcecode)))
+                    lib.error('--- </ERROR[1]> ---')
+                    raise AssertionError('unable to define names: {}'.format(names))
+            for name in names:
+                try:
+                    try:
+                        # pass
+                        lib.info(' * try visitor.extract_definition({})'.format(name))
+                        d = visitor.extract_definition(name)
+                    except KeyError as ex:
+                        lib.info(' * encountered issue: {!r}'.format(ex))
+                        # There is a corner case where we have the definition,
+                        # we just need to move it to the top.
+                        flag = False
+                        for d_ in lib.body_defs.values():
+                            if name == d_.name:
+                                lib.info(' * corner case: move definition to top')
+                                lib._add_definition(d_)
+                                flag = True
+                                break
+
+                        # There is another corner case where we only have a
+                        # prefix of the definition. Note, we could be more
+                        # clever and look at the attribute usage in the current
+                        # sourcefile instead of blindly taking everything with
+                        # the given prefix.
+                        if visitor.definitions.has_subtrie(name):
+                            flag = True
+                            for k, d in visitor.definitions.items(name):
+                                lib.info(' * add extracted prefix def {} for {}'.format(k, name))
+                                lib._add_definition(d)
+
+                        if not flag:
+                            raise
+                    else:
+                        lib.info(' * add extracted def {}'.format(name))
+                        lib._add_definition(d)
+                    # type_, text = visitor.extract_definition(name)
+                except Exception as ex:
+                    lib.info(' * unable to extracted def {} due to {!r}'.format(name, ex))
+                    # current_sourcecode = lib.current_sourcecode()
+                    lib.error('--- <ERROR[2]> ---')
+                    lib.error('Error computing source code extract_definition')
+                    lib.error(' * failed to close name = {!r}'.format(name))
+                    # lib.error('<<< CURRENT_SOURCE >>>\n{}\n<<<>>>'.format(ub.highlight_code(current_sourcecode)))
+                    lib.error('--- </ERROR[2]> ---')
+
+    def expand(lib, expand_names):
+        """
+        Experimental feature. Remove all references to specific modules by
+        directly copying in the referenced source code. If the code is
+        referenced from a module, then the references will need to change as
+        well.
+
+        TODO:
+            - [ ] Add special unique (mangled) suffixes to all expanded names
+                to avoid name conflicts.
+
+        Args:
+            expand_name (List[str]): list of module names. For each module
+                we expand any reference to that module in the closed source
+                code by directly copying the referenced code into that file.
+                This doesn't work in all cases, but it usually does.
+                Reasons why this wouldn't work include trying to expand
+                import from C-extension modules and expanding modules with
+                complicated global-level logic.
+
+        Ignore:
+            >>> # Test a heavier duty class
+            >>> from liberator.closer import *
+            >>> import netharn as nh
+            >>> obj = nh.device.MountedModel
+            >>> #obj = nh.layers.ConvNormNd
+            >>> #obj = nh.data.CocoDataset
+            >>> #expand_names = ['ubelt', 'progiter']
+            >>> expand_names = ['netharn']
+            >>> lib = Liberator()
+            >>> lib.add_dynamic(obj)
+            >>> lib.expand(expand_names)
+            >>> #print('header_defs = ' + ub.repr2(lib.header_defs, si=1))
+            >>> #print('body_defs = ' + ub.repr2(lib.body_defs, si=1))
+            >>> print('SOURCE:')
+            >>> text = lib.current_sourcecode()
+            >>> print(text)
+        """
+        lib.info('\n\n')
+        lib.info('====\n\n')
+        lib.info("!!! EXPANDING")
+        # Expand references to internal modules
+        flag = True
+        while flag:
+
+            # Associate all top-level modules with any possible expand_name
+            # that might trigger them to be expanded. Note this does not
+            # account for nested imports.
+            expandable_definitions = ub.ddict(list)
+            for d in lib.header_defs.values():
+                parts = d.native_modname.split('.')
+                for i in range(1, len(parts) + 1):
+                    root = '.'.join(parts[:i])
+                    expandable_definitions[root].append(d)
+
+            lib.info('expandable_definitions = {!r}'.format(
+                list(expandable_definitions.keys())))
+
+            flag = False
+            # current_sourcecode = lib.current_sourcecode()
+            # closed_visitor = ImportVisitor.parse(source=current_sourcecode)
+            for root in expand_names:
+                needs_expansion = expandable_definitions.get(root, [])
+
+                lib.info('root = {!r}'.format(root))
+                lib.info('needs_expansion = {!r}'.format(needs_expansion))
+                for d in needs_expansion:
+                    if d._expanded:
+                        continue
+                    flag = True
+                    # if d.absname == d.native_modname:
+                    if ub.modname_to_modpath(d.absname):
+                        lib.info('TODO: NEED TO CLOSE module = {}'.format(d))
+                        # import warnings
+                        # warnings.warn('Closing module {} may not be implemented'.format(d))
+                        # definition is a module, need to expand its attributes
+                        lib.expand_module_attributes(d)
+                        d._expanded = True
+                    else:
+                        lib.info('TODO: NEED TO CLOSE attribute varname = {}'.format(d))
+                        import warnings
+                        # warnings.warn('Closing attribute {} may not be implemented'.format(d))
+                        # definition is a non-module, directly copy in its code
+                        # We can directly replace this import statement by
+                        # copy-pasting the relevant code from the other module
+                        # (ASSUMING THERE ARE NO NAME CONFLICTS)
+
+                        assert d.type == 'ImportFrom'
+
+                        try:
+                            native_modpath = ub.modname_to_modpath(d.native_modname)
+                            if native_modpath is None:
+                                raise Exception('Cannot find the module path for modname={!r}. '
+                                                'Are you missing an __init__.py?'.format(d.native_modname))
+
+                            sub_lib = Liberator(lib.logger.tag + '.sub.' + d.name,
+                                                logger=lib.logger)
+                            sub_lib.add_static(d.name, native_modpath)
+                            # sub_visitor = sub_lib.visitors[d.native_modname]
+                            sub_lib.expand(expand_names)
+
+                            # sub_lib.close(sub_visitor)
+                        except NotAPythonFile as ex:
+                            warnings.warn('CANNOT EXPAND d = {!r}, REASON: {}'.format(d, repr(ex)))
+                            d._expanded = True
+                            raise
+                            continue
+                        except Exception as ex:
+                            warnings.warn('CANNOT EXPAND d = {!r}, REASON: {}'.format(d, repr(ex)))
+                            d._expanded = True
+                            raise
+                            continue
+                        else:
+                            # Hack: remove the imported definition and add the
+                            # explicit definition
+                            # TODO: FIXME: more robust modification and replacement
+                            d._code = '# ' + d.code
+                            d._expanded = True
+
+                            for d_ in sub_lib.header_defs.values():
+                                lib._add_definition(d_)
+                            for d_ in sub_lib.body_defs.values():
+                                lib._add_definition(d_)
+
+                            # print('sub_visitor = {!r}'.format(sub_visitor))
+                            # lib.close(sub_visitor)
+                            lib.info('CLOSED attribute d = {}'.format(d))
+
+    def expand_module_attributes(lib, d):
+        """
+        Args:
+            d (Definition): the definition to expand
+        """
+        # current_sourcecode = lib.current_sourcecode()
+        # closed_visitor = ImportVisitor.parse(source=current_sourcecode)
+        assert 'Import' in d.type
+        varname = d.name
+        varmodpath = ub.modname_to_modpath(d.absname)
+        modname = d.absname
+
+        def _exhaust(varname, modname, modpath):
+            lib.info('REWRITE ACCESSOR varname={!r}, modname={}, modpath={}'.format(varname, modname, modpath))
+
+            # Modify the current node definitions and recompute code
+            # TODO: make more robust
+            rewriter = RewriteModuleAccess(varname)
+            for d_ in lib.body_defs.values():
+                rewriter.visit(d_.node)
+                d_._code = unparse(d_.node)
+
+            lib.info('rewriter.accessed_attrs = {!r}'.format(rewriter.accessed_attrs))
+
+            # For each modified attribute, copy in the appropriate source.
+            for subname in rewriter.accessed_attrs:
+                submodname = modname + '.' + subname
+                submodpath = ub.modname_to_modpath(submodname)
+                if submodpath is not None:
+                    # if the accessor is to another module, exhaust until
+                    # we reach a non-module
+                    lib.info('EXAUSTING: {}, {}, {}'.format(subname, submodname, submodpath))
+                    _exhaust(subname, submodname, submodpath)
+                else:
+                    # Otherwise we can directly add the referenced attribute
+                    lib.info('FINALIZE: {} from {}'.format(subname, modpath))
+                    lib.add_static(subname, modpath)
+
+        _exhaust(varname, modname, varmodpath)
+        d._code = '# ' + d.code
 
 
 class UnparserVariant(astunparse.Unparser):
@@ -166,7 +689,7 @@ def source_closure(obj, expand_names=[]):
         >>> text = source_closure(obj, expand_names)
         >>> print(text)
     """
-    closer = Closer()
+    lib = Liberator()
 
     # First try to add statically (which tends to be slightly nicer)
     try:
@@ -175,465 +698,19 @@ def source_closure(obj, expand_names=[]):
             modpath = sys.modules[obj.__module__].__file__
         except Exception:
             # Otherwise add dynamically
-            closer.add_dynamic(obj)
+            lib.add_dynamic(obj)
         else:
-            closer.add_static(name, modpath)
+            lib.add_static(name, modpath)
         if expand_names:
-            closer.expand(expand_names)
-        closed_sourcecode = closer.current_sourcecode()
+            lib.expand(expand_names)
+        closed_sourcecode = lib.current_sourcecode()
     except Exception:
         print('ERROR IN CLOSING')
         print('[[[ START CLOSE LOGS ]]]')
-        print('closer.logs =\n{}'.format('\n'.join(closer.logs)))
+        print('lib.logs =\n{}'.format('\n'.join(lib.logger.logs)))
         print('[[[ END CLOSE LOGS ]]]')
         raise
     return closed_sourcecode
-
-
-class Closer(ub.NiceRepr):
-    """
-    Maintains the current state of the source code
-
-    There are 3 major steps:
-    (a) extract the code to that defines a function or class from a module,
-    (b) go back to the module and extract extra code required to define any
-        names that were undefined in the extracted code, and
-    (c) replace import statements to specified "expand" modules with the actual code
-        used to define the variables accessed via the imports.
-
-    This results in a standalone file that has absolutely no dependency on the
-    original module or the specified "expand" modules (the expand module is
-    usually the module that is doing the training for a network. This means
-    that you can deploy a model independant of the training framework).
-
-    Note:
-        This is not designed to work for cases where the code depends on logic
-        executed in a global scope (e.g. dynamically registering properties) .
-        I think its actually impossible to statically account for this case in
-        general.
-
-    Ignore:
-        >>> from liberator.closer import *
-        >>> import fastai.vision
-        >>> obj = fastai.vision.models.WideResNet
-        >>> expand_names = ['fastai']
-        >>> closer = Closer()
-        >>> closer.add_dynamic(obj)
-        >>> closer.expand(expand_names)
-        >>> #print(ub.repr2(closer.body_defs, si=1))
-        >>> print(closer.current_sourcecode())
-
-    Ignore:
-        >>> from liberator.closer import Closer
-        >>> from fastai.vision.models import unet
-        >>> closer = Closer()
-        >>> closer.add_dynamic(unet.DynamicUnet)
-        >>> closer.expand(['fastai'])
-        >>> print(closer.current_sourcecode())
-
-    Ignore:
-        >>> from liberator.closer import *
-        >>> import netharn as nh
-        >>> from netharn.models.yolo2 import yolo2
-        >>> obj = yolo2.Yolo2
-        >>> expand_names = ['netharn']
-        >>> closer = Closer()
-        >>> closer.add_static(obj.__name__, sys.modules[obj.__module__].__file__)
-        >>> closer.expand(expand_names)
-        >>> #print(ub.repr2(closer.body_defs, si=1))
-        >>> print(closer.current_sourcecode())
-    """
-    def __init__(closer, tag='root'):
-        closer.header_defs = ub.odict()
-        closer.body_defs = ub.odict()
-        closer.visitors = {}
-        closer.tag = tag
-
-        closer.logs = []
-        closer._log_indent = ''
-
-        closer._lazy_visitors = []
-
-    def debug(closer, msg):
-        closer.logs.append(closer._log_indent + msg)
-
-    def _print_logs(closer):
-        print('\n'.join(closer.logs))
-
-    def __nice__(self):
-        return self.tag
-
-    def _add_definition(closer, d):
-        closer.debug('_add_definition = {!r}'.format(d))
-        import copy
-        d = copy.deepcopy(d)
-        # print('ADD DEFINITION d = {!r}'.format(d))
-        if 'Import' in d.type:
-            if d.absname in closer.header_defs:
-                del closer.header_defs[d.absname]
-            closer.header_defs[d.absname] = d
-        else:
-            if d.absname in closer.body_defs:
-                del closer.body_defs[d.absname]
-            closer.body_defs[d.absname] = d
-
-    def current_sourcecode(self):
-        header_lines = [d.code for d in self.header_defs.values()]
-        body_lines = [d.code for d in self.body_defs.values()][::-1]
-        current_sourcecode = '\n'.join(header_lines)
-        current_sourcecode += '\n\n\n'
-        current_sourcecode += '\n\n\n'.join(body_lines)
-        return current_sourcecode
-
-    def _ensure_visitor(closer, modpath=None, module=None):
-        """
-        Return an existing visitor for a module or create one if it doesnt
-        exist
-        """
-        if modpath is None and module is not None:
-            modpath = module.__file__
-
-        if modpath not in closer.visitors:
-            visitor = ImportVisitor.parse(module=module, modpath=modpath)
-            closer.visitors[modpath] = visitor
-        visitor = closer.visitors[modpath]
-        return visitor
-
-    def add_dynamic(closer, obj, eager=True):
-        """
-        Add the source to define a live python object
-
-        Args:
-            obj (object): a reference to a class or function
-
-            eager (bool): experimental
-        """
-        closer.debug('closer.add_dynamic(obj={!r})'.format(obj))
-        name = obj.__name__
-        modname = obj.__module__
-        module = sys.modules[modname]
-
-        visitor = closer._ensure_visitor(module=module)
-
-        d = visitor.extract_definition(name)
-
-        closer._add_definition(d)
-
-        if eager:
-            closer.close(visitor)
-        else:
-            # Experimental
-            closer._lazy_visitors.append(visitor)
-
-    def add_static(closer, name, modpath):
-        # print('ADD_STATIC name = {} from {}'.format(name, modpath))
-        closer.debug('closer.add_static(name={!r}, modpath={!r})'.format(name, modpath))
-
-        visitor = closer._ensure_visitor(modpath=modpath)
-        d = visitor.extract_definition(name)
-
-        closer._add_definition(d)
-        closer.close(visitor)
-
-    def _lazy_close(closer):
-        # Experimental
-        closer.close2(ub.oset(closer._lazy_visitors))
-        closer._lazy_visitors = []
-
-    def close2(closer, visitors):
-        """
-        Experimental
-
-        Populate all undefined names using the context from a module
-        """
-        # Parse the parent module to find only the relevant global varaibles and
-        # include those in the extracted source code.
-        closer.debug('closing')
-        current_sourcecode = closer.current_sourcecode()
-
-        # Loop until all undefined names are defined
-        names = True
-        while names:
-            # Determine if there are any variables needed from the parent scope
-            current_sourcecode = closer.current_sourcecode()
-            # Make sure we process names in the same order for hashability
-            prev_names = names
-            names = sorted(undefined_names(current_sourcecode))
-            closer.debug(' * undefined_names = {}'.format(names))
-            if names == prev_names:
-                for visitor in visitors:
-                    print('visitor.definitions = {}'.format(ub.repr2(visitor.definitions, si=1)))
-                if DEBUG:
-                    warnings.warn('We were unable do do anything about undefined names')
-                    return
-                else:
-                    current_sourcecode = closer.current_sourcecode()
-                    print('--- <ERROR> ---')
-                    print('Unable to define names')
-                    print(' * names = {!r}'.format(names))
-                    print('<<< CURRENT_SOURCE >>>\n{}\n<<<>>>'.format(ub.highlight_code(current_sourcecode)))
-                    print('--- </ERROR> ---')
-                    raise AssertionError('unable to define names: {}'.format(names))
-            for name in names:
-                try:
-                    # Greedilly choose the visitor that has the name we are
-                    # looking for.
-                    for visitor in visitors:
-                        if name in visitor.definitions:
-                            break
-                    try:
-                        closer.debug(' * try visitor.extract_definition({})'.format(names))
-                        d = visitor.extract_definition(name)
-                    except KeyError as ex:
-                        closer.debug(' * encountered issue: {!r}'.format(ex))
-                        # There is a corner case where we have the definition,
-                        # we just need to move it to the top.
-                        flag = False
-                        for d_ in closer.body_defs.values():
-                            if name == d_.name:
-                                closer.debug(' * corner case: move definition to top')
-                                closer._add_definition(d_)
-                                flag = True
-                                break
-                        if not flag:
-                            raise
-                    else:
-                        closer.debug(' * add extracted def {}'.format(name))
-                        closer._add_definition(d)
-                        # type_, text = visitor.extract_definition(name)
-                except Exception as ex:
-                    closer.debug(' * unable to extracted def {} due to {!r}'.format(name, ex))
-                    current_sourcecode = closer.current_sourcecode()
-                    print('--- <ERROR> ---')
-                    print('Error computing source code extract_definition')
-                    print(' * failed to close name = {!r}'.format(name))
-                    # print('<<< CURRENT_SOURCE >>>\n{}\n<<<>>>'.format(ub.highlight_code(current_sourcecode)))
-                    print('--- </ERROR> ---')
-
-    def close(closer, visitor):
-        """
-        Populate all undefined names using the context from a module
-        """
-        # Parse the parent module to find only the relevant global varaibles and
-        # include those in the extracted source code.
-        closer.debug('closing')
-        current_sourcecode = closer.current_sourcecode()
-
-        # Loop until all undefined names are defined
-        names = True
-        while names:
-            # Determine if there are any variables needed from the parent scope
-            current_sourcecode = closer.current_sourcecode()
-            # Make sure we process names in the same order for hashability
-            prev_names = names
-            names = sorted(undefined_names(current_sourcecode))
-            closer.debug(' * undefined_names = {}'.format(names))
-            if names == prev_names:
-                print('visitor.definitions = {}'.format(ub.repr2(visitor.definitions, si=1)))
-                if DEBUG:
-                    warnings.warn('We were unable do do anything about undefined names')
-                    return
-                else:
-                    current_sourcecode = closer.current_sourcecode()
-                    print('--- <ERROR> ---')
-                    print('Unable to define names')
-                    print(' * names = {!r}'.format(names))
-                    print('<<< CURRENT_SOURCE >>>\n{}\n<<<>>>'.format(ub.highlight_code(current_sourcecode)))
-                    print('--- </ERROR> ---')
-                    raise AssertionError('unable to define names: {}'.format(names))
-            for name in names:
-                try:
-                    try:
-                        closer.debug(' * try visitor.extract_definition({})'.format(names))
-                        d = visitor.extract_definition(name)
-                    except KeyError as ex:
-                        closer.debug(' * encountered issue: {!r}'.format(ex))
-                        # There is a corner case where we have the definition,
-                        # we just need to move it to the top.
-                        flag = False
-                        for d_ in closer.body_defs.values():
-                            if name == d_.name:
-                                closer.debug(' * corner case: move definition to top')
-                                closer._add_definition(d_)
-                                flag = True
-                                break
-                        if not flag:
-                            raise
-                    else:
-                        closer.debug(' * add extracted def {}'.format(name))
-                        closer._add_definition(d)
-                    # type_, text = visitor.extract_definition(name)
-                except Exception as ex:
-                    closer.debug(' * unable to extracted def {} due to {!r}'.format(name, ex))
-                    current_sourcecode = closer.current_sourcecode()
-                    print('--- <ERROR> ---')
-                    print('Error computing source code extract_definition')
-                    print(' * failed to close name = {!r}'.format(name))
-                    # print('<<< CURRENT_SOURCE >>>\n{}\n<<<>>>'.format(ub.highlight_code(current_sourcecode)))
-                    print('--- </ERROR> ---')
-
-    def expand(closer, expand_names):
-        """
-        Experimental feature. Remove all references to specific modules by
-        directly copying in the referenced source code. If the code is
-        referenced from a module, then the references will need to change as
-        well.
-
-        TODO:
-            - [ ] Add special unique (mangled) suffixes to all expanded names
-                to avoid name conflicts.
-
-        Args:
-            expand_name (List[str]): list of module names. For each module
-                we expand any reference to that module in the closed source
-                code by directly copying the referenced code into that file.
-                This doesn't work in all cases, but it usually does.
-                Reasons why this wouldn't work include trying to expand
-                import from C-extension modules and expanding modules with
-                complicated global-level logic.
-
-        Ignore:
-            >>> # Test a heavier duty class
-            >>> from liberator.closer import *
-            >>> import netharn as nh
-            >>> obj = nh.device.MountedModel
-            >>> #obj = nh.layers.ConvNormNd
-            >>> obj = nh.data.CocoDataset
-            >>> #expand_names = ['ubelt', 'progiter']
-            >>> closer = Closer()
-            >>> closer.add_dynamic(obj)
-            >>> closer.expand(expand_names)
-            >>> #print('header_defs = ' + ub.repr2(closer.header_defs, si=1))
-            >>> #print('body_defs = ' + ub.repr2(closer.body_defs, si=1))
-            >>> print('SOURCE:')
-            >>> text = closer.current_sourcecode()
-            >>> print(text)
-        """
-        closer.debug("!!! EXPANDING")
-        # Expand references to internal modules
-        flag = True
-        while flag:
-
-            # Associate all top-level modules with any possible expand_name
-            # that might trigger them to be expanded. Note this does not
-            # account for nested imports.
-            expandable_definitions = ub.ddict(list)
-            for d in closer.header_defs.values():
-                parts = d.native_modname.split('.')
-                for i in range(1, len(parts) + 1):
-                    root = '.'.join(parts[:i])
-                    expandable_definitions[root].append(d)
-
-            closer.debug('expandable_definitions = {!r}'.format(
-                list(expandable_definitions.keys())))
-
-            flag = False
-            # current_sourcecode = closer.current_sourcecode()
-            # closed_visitor = ImportVisitor.parse(source=current_sourcecode)
-            for root in expand_names:
-                needs_expansion = expandable_definitions.get(root, [])
-
-                closer.debug('root = {!r}'.format(root))
-                closer.debug('needs_expansion = {!r}'.format(needs_expansion))
-                for d in needs_expansion:
-                    if d._expanded:
-                        continue
-                    flag = True
-                    # if d.absname == d.native_modname:
-                    if ub.modname_to_modpath(d.absname):
-                        closer.debug('TODO: NEED TO CLOSE module = {}'.format(d))
-                        # import warnings
-                        # warnings.warn('Closing module {} may not be implemented'.format(d))
-                        # definition is a module, need to expand its attributes
-                        closer.expand_module_attributes(d)
-                        d._expanded = True
-                    else:
-                        closer.debug('TODO: NEED TO CLOSE attribute varname = {}'.format(d))
-                        import warnings
-                        # warnings.warn('Closing attribute {} may not be implemented'.format(d))
-                        # definition is a non-module, directly copy in its code
-                        # We can directly replace this import statement by
-                        # copy-pasting the relevant code from the other module
-                        # (ASSUMING THERE ARE NO NAME CONFLICTS)
-
-                        assert d.type == 'ImportFrom'
-
-                        try:
-                            native_modpath = ub.modname_to_modpath(d.native_modname)
-                            if native_modpath is None:
-                                raise Exception('Cannot find the module path for modname={!r}. '
-                                                'Are you missing an __init__.py?'.format(d.native_modname))
-                            sub_closer = Closer(closer.tag + '.sub')
-                            sub_closer.add_static(d.name, native_modpath)
-                            # sub_visitor = sub_closer.visitors[d.native_modname]
-                            sub_closer.expand(expand_names)
-                            # sub_closer.close(sub_visitor)
-                        except NotAPythonFile as ex:
-                            warnings.warn('CANNOT EXPAND d = {!r}, REASON: {}'.format(d, repr(ex)))
-                            d._expanded = True
-                            raise
-                            continue
-                        except Exception as ex:
-                            warnings.warn('CANNOT EXPAND d = {!r}, REASON: {}'.format(d, repr(ex)))
-                            d._expanded = True
-                            raise
-                            continue
-                            # raise
-
-                        # Hack: remove the imported definition and add the explicit definition
-                        # TODO: FIXME: more robust modification and replacement
-                        d._code = '# ' + d.code
-                        d._expanded = True
-
-                        for d_ in sub_closer.header_defs.values():
-                            closer._add_definition(d_)
-                        for d_ in sub_closer.body_defs.values():
-                            closer._add_definition(d_)
-
-                        # print('sub_visitor = {!r}'.format(sub_visitor))
-                        # closer.close(sub_visitor)
-                        closer.debug('CLOSED attribute d = {}'.format(d))
-
-    def expand_module_attributes(closer, d):
-        """
-        Args:
-            d (Definition): the definition to expand
-        """
-        # current_sourcecode = closer.current_sourcecode()
-        # closed_visitor = ImportVisitor.parse(source=current_sourcecode)
-        assert 'Import' in d.type
-        varname = d.name
-        varmodpath = ub.modname_to_modpath(d.absname)
-        modname = d.absname
-
-        def _exhaust(varname, modname, modpath):
-            closer.debug('REWRITE ACCESSOR varname={!r}, modname={}, modpath={}'.format(varname, modname, modpath))
-
-            # Modify the current node definitions and recompute code
-            # TODO: make more robust
-            rewriter = RewriteModuleAccess(varname)
-            for d_ in closer.body_defs.values():
-                rewriter.visit(d_.node)
-                d_._code = unparse(d_.node)
-
-            closer.debug('rewriter.accessed_attrs = {!r}'.format(rewriter.accessed_attrs))
-
-            # For each modified attribute, copy in the appropriate source.
-            for subname in rewriter.accessed_attrs:
-                submodname = modname + '.' + subname
-                submodpath = ub.modname_to_modpath(submodname)
-                if submodpath is not None:
-                    # if the accessor is to another module, exhaust until
-                    # we reach a non-module
-                    closer.debug('EXAUSTING: {}, {}, {}'.format(subname, submodname, submodpath))
-                    _exhaust(subname, submodname, submodpath)
-                else:
-                    # Otherwise we can directly add the referenced attribute
-                    closer.debug('FINALIZE: {} from {}'.format(subname, modpath))
-                    closer.add_static(subname, modpath)
-
-        _exhaust(varname, modname, varmodpath)
-        d._code = '# ' + d.code
 
 
 def _parse_static_node_value(node):
@@ -675,6 +752,7 @@ def undefined_names(sourcecode):
     Example:
         >>> print(ub.repr2(undefined_names('x = y'), nl=0))
         {'y'}
+
     """
     import pyflakes.api
     import pyflakes.reporter
@@ -828,6 +906,67 @@ class NotAPythonFile(ValueError):
     pass
 
 
+class AttributeAccessVisitor(ast.NodeVisitor):
+    """
+    Constructs a list of all fully-specified attributes names accessed in a
+    parse tree
+
+    TODO: could use this to parse out all used attributes in current sourcecode
+
+    Ignore:
+        from liberator.closer import AttributeAccessVisitor  # NOQA
+        fpath = ub.expandpath('~/code/dvc/dvc/lock.py')
+        sourcecode = ub.readfrom(fpath)
+        pt = ast.parse(sourcecode)
+        self = AttributeAccessVisitor()
+        self.visit(pt)
+        self.dotted_trie
+
+        WIP: TRY TO FIX ISSUE WITH IMPORTINING SUBPACKAGES EXPLICITLY
+
+        >>> sourcecode = ub.codeblock(
+            '''
+            class MyClass(foo.bar.baz):
+                pass
+
+            class MyClass3(foo.bar.baz):
+                pass
+
+            def blah():
+                return foo.bar.BAZ()
+            ''')
+        >>> print(ub.repr2(undefined_names(sourcecode), nl=0))
+
+        from liberator.closer import ImportVisitor  # NOQA
+        pt = ast.parse(sourcecode)
+
+        node1 = pt.body[0].bases[0]
+
+        visitor = AttributeAccessVisitor()
+        visitor.visit(pt)
+        visitor.dotted_names
+    """
+
+    def __init__(self):
+        import pygtrie
+        self.dotted_trie = pygtrie.StringTrie(separator='.')
+
+    def visit_Attribute(self, node):
+        curr = node
+        attr_chain = []
+        while isinstance(curr, ast.Attribute):
+            attr_chain.append(curr.attr)
+            curr = curr.value
+
+        if isinstance(curr, ast.Name):
+            attr_chain.append(curr.id)
+
+        dotted_name = '.'.join(attr_chain[::-1])
+        self.dotted_trie.setdefault(dotted_name, 0)
+        self.dotted_trie[dotted_name] += 1
+        # self.generic_visit(node)
+
+
 class ImportVisitor(ast.NodeVisitor, ub.NiceRepr):
     """
     Used to search for dependencies in the original module
@@ -837,8 +976,8 @@ class ImportVisitor(ast.NodeVisitor, ub.NiceRepr):
 
     Example:
         >>> from liberator.closer import *
-        >>> from liberator import closer
-        >>> modpath = closer.__file__
+        >>> from liberator import lib
+        >>> modpath = lib.__file__
         >>> sourcecode = ub.codeblock(
         ...     '''
         ...     from ubelt.util_const import *
@@ -857,8 +996,8 @@ class ImportVisitor(ast.NodeVisitor, ub.NiceRepr):
 
     Example:
         >>> from liberator.closer import *
-        >>> from liberator import closer
-        >>> modpath = closer.__file__
+        >>> from liberator import lib
+        >>> modpath = lib.__file__
         >>> sourcecode = ub.codeblock(
                 '''
                 def decor(func):
@@ -874,24 +1013,28 @@ class ImportVisitor(ast.NodeVisitor, ub.NiceRepr):
     Ignore:
         >>> import mmdet
         >>> import liberator
-        >>> closer = liberator.closer.Closer()
-        >>> closer.add_dynamic(mmdet.models.backbones.HRNet)
-        >>> print(closer.current_sourcecode())
-        >>> visitor = ub.peek(closer.visitors.values())
+        >>> lib = liberator.closer.Liberator()
+        >>> lib.add_dynamic(mmdet.models.backbones.HRNet)
+        >>> print(lib.current_sourcecode())
+        >>> visitor = ub.peek(lib.visitors.values())
         >>> print(ub.repr2(visitor.definitions, si=1))
         >>> d = visitor.definitions['HRNet']
         >>> print(d.code[0:1000])
 
     """
 
-    def __init__(visitor, modpath=None, modname=None, module=None, pt=None):
+    def __init__(visitor, modpath=None, modname=None, module=None, pt=None,
+                 logger=None):
         super(ImportVisitor, visitor).__init__()
         visitor.pt = pt
         visitor.modpath = modpath
         visitor.modname = modname
         visitor.module = module
 
-        visitor.definitions = {}
+        visitor.logger = logger
+
+        import pygtrie
+        visitor.definitions = pygtrie.StringTrie(separator='.')
         visitor.top_level = True
 
     def __nice__(self):
@@ -902,7 +1045,7 @@ class ImportVisitor(ast.NodeVisitor, ub.NiceRepr):
 
     @classmethod
     def parse(ImportVisitor, source=None, modpath=None, modname=None,
-              module=None):
+              module=None, logger=None):
         if module is not None:
             if source is None:
                 source = inspect.getsource(module)
@@ -940,8 +1083,14 @@ class ImportVisitor(ast.NodeVisitor, ub.NiceRepr):
                     raise
         else:
             pt = ast.parse(source)
-        visitor = ImportVisitor(modpath, modname, module, pt=pt)
+        visitor = ImportVisitor(modpath, modname, module, pt=pt, logger=logger)
         visitor.visit(pt)
+
+        # Hack in attribute visiting
+        # attr_visitor = AttributeAccessVisitor()
+        # attr_visitor.visit(pt)
+        # visitor.dotted_trie = attr_visitor.dotted_trie
+
         return visitor
 
     def extract_definition(visitor, name):
@@ -973,10 +1122,10 @@ class ImportVisitor(ast.NodeVisitor, ub.NiceRepr):
                     #code = unparse(node).strip('\n')
                     code = None
 
-                if DEBUG:
+                if visitor.logger:
                     if key in visitor.definitions:
                         # OVERLOADED
-                        print('OVERLOADED key = {!r}'.format(key))
+                        visitor.logger.debug('OVERLOADED key = {!r}'.format(key))
 
                 visitor.definitions[key] = Definition(
                     key, node, code=code, type='Assign',
@@ -1068,7 +1217,9 @@ class ImportVisitor(ast.NodeVisitor, ub.NiceRepr):
             if varname == '*':
                 # HACK
                 abs_modpath = ub.modname_to_modpath(abs_modname)
-                for d in ImportVisitor.parse(modpath=abs_modpath).definitions.values():
+                star_visitor = ImportVisitor.parse(
+                    modpath=abs_modpath, logger=visitor.logger)
+                for d in star_visitor.definitions.values():
                     if not d.name.startswith('_'):
                         yield d
             else:
@@ -1086,6 +1237,7 @@ def _closefile(fpath, modnames):
     CommandLine:
         xdoctest -m ~/code/liberator/closer.py _closefile
         xdoctest -m liberator.closer _closefile --fpath=~/code/boltons/tests/test_cmdutils.py --modnames=ubelt,
+        xdoctest -m liberator.closer _closefile --fpath=~/code/dvc/dvc/updater.py --modnames=dvc,
 
     Example:
         >>> # SCRIPT
@@ -1095,8 +1247,8 @@ def _closefile(fpath, modnames):
         >>>     'fpath': scfg.Path(None),
         >>>     'modnames': scfg.Value([]),
         >>> })
-        >>> fpath = config['fpath'] = ub.expandpath('~/code/boltons/tests/test_cmdutils.py')
-        >>> modnames = config['modnames'] = ['ubelt']
+        >>> #fpath = config['fpath'] = ub.expandpath('~/code/boltons/tests/test_cmdutils.py')
+        >>> #modnames = config['modnames'] = ['ubelt']
         >>> _closefile(**config)
     """
     from xdoctest import static_analysis as static
@@ -1106,9 +1258,19 @@ def _closefile(fpath, modnames):
     calldefs = static.parse_calldefs(source, fpath)
     calldefs.pop('__doc__', None)
 
-    closer = Closer()
+    lib = Liberator()
     for key in calldefs.keys():
-        closer.add_static(key, modpath)
-    closer.expand(expand_names)
-    #print(ub.repr2(closer.body_defs, si=1))
-    print(closer.current_sourcecode())
+        lib.add_static(key, modpath)
+    lib.expand(expand_names)
+    #print(ub.repr2(lib.body_defs, si=1))
+    print(lib.current_sourcecode())
+
+
+class Closer(Liberator):
+    """
+    Deprecated in favor of :class:`Liberator`.
+
+    The original name of the Liberator class was called Closer. Exposing this
+    for backwards compatibility.
+    """
+    pass

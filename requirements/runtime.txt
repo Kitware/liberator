@@ -1,4 +1,5 @@
 astunparse
 six
 ubelt
-pyflakes
+pyflakes >= 2.2.0
+pygtrie >= 2.3.3
