@@ -113,7 +113,7 @@ class Liberator(ub.NiceRepr):
         general.
 
     Ignore:
-        >>> from liberator.closer import *
+        >>> from liberator.core import *
         >>> import fastai.vision
         >>> obj = fastai.vision.models.WideResNet
         >>> expand_names = ['fastai']
@@ -124,7 +124,7 @@ class Liberator(ub.NiceRepr):
         >>> print(lib.current_sourcecode())
 
     Ignore:
-        >>> from liberator.closer import Liberator
+        >>> from liberator.core import Liberator
         >>> from fastai.vision.models import unet
         >>> lib = Liberator()
         >>> lib.add_dynamic(unet.DynamicUnet)
@@ -132,7 +132,7 @@ class Liberator(ub.NiceRepr):
         >>> print(lib.current_sourcecode())
 
     Ignore:
-        >>> from liberator.closer import *
+        >>> from liberator.core import *
         >>> import netharn as nh
         >>> from netharn.models.yolo2 import yolo2
         >>> obj = yolo2.Yolo2
@@ -410,7 +410,7 @@ class Liberator(ub.NiceRepr):
 
         Ignore:
             >>> # Test a heavier duty class
-            >>> from liberator.closer import *
+            >>> from liberator.core import *
             >>> import netharn as nh
             >>> obj = nh.device.MountedModel
             >>> #obj = nh.layers.ConvNormNd
@@ -634,7 +634,7 @@ def source_closure(obj, expand_names=[]):
         str: closed_sourcecode: text defining a new python module.
 
     CommandLine:
-        xdoctest -m liberator.closer source_closure
+        xdoctest -m liberator.core source_closure
 
     Example:
         >>> import torchvision
@@ -682,7 +682,7 @@ def source_closure(obj, expand_names=[]):
 
     Example:
         >>> # Test a heavier duty class
-        >>> from liberator.closer import *
+        >>> from liberator.core import *
         >>> import netharn as nh
         >>> obj = nh.layers.ConvNormNd
         >>> expand_names = ['netharn']
@@ -791,7 +791,7 @@ class RewriteModuleAccess(ast.NodeTransformer):
     Any attributes that were modified are stored in `accessed_attrs`.
 
     Example:
-        >>> from liberator.closer import *
+        >>> from liberator.core import *
         >>> source = ub.codeblock(
         ...     '''
         ...     foo.bar = 3
@@ -914,7 +914,7 @@ class AttributeAccessVisitor(ast.NodeVisitor):
     TODO: could use this to parse out all used attributes in current sourcecode
 
     Ignore:
-        from liberator.closer import AttributeAccessVisitor  # NOQA
+        from liberator.core import AttributeAccessVisitor  # NOQA
         fpath = ub.expandpath('~/code/dvc/dvc/lock.py')
         sourcecode = ub.readfrom(fpath)
         pt = ast.parse(sourcecode)
@@ -937,7 +937,7 @@ class AttributeAccessVisitor(ast.NodeVisitor):
             ''')
         >>> print(ub.repr2(undefined_names(sourcecode), nl=0))
 
-        from liberator.closer import ImportVisitor  # NOQA
+        from liberator.core import ImportVisitor  # NOQA
         pt = ast.parse(sourcecode)
 
         node1 = pt.body[0].bases[0]
@@ -975,9 +975,9 @@ class ImportVisitor(ast.NodeVisitor, ub.NiceRepr):
         https://greentreesnakes.readthedocs.io/en/latest/nodes.html
 
     Example:
-        >>> from liberator.closer import *
-        >>> from liberator import lib
-        >>> modpath = lib.__file__
+        >>> from liberator.core import *
+        >>> from liberator import core
+        >>> modpath = core.__file__
         >>> sourcecode = ub.codeblock(
         ...     '''
         ...     from ubelt.util_const import *
@@ -995,9 +995,9 @@ class ImportVisitor(ast.NodeVisitor, ub.NiceRepr):
         >>> print(ub.repr2(visitor.definitions, si=1))
 
     Example:
-        >>> from liberator.closer import *
-        >>> from liberator import lib
-        >>> modpath = lib.__file__
+        >>> from liberator.core import *
+        >>> from liberator import core
+        >>> modpath = core.__file__
         >>> sourcecode = ub.codeblock(
                 '''
                 def decor(func):
@@ -1013,7 +1013,7 @@ class ImportVisitor(ast.NodeVisitor, ub.NiceRepr):
     Ignore:
         >>> import mmdet
         >>> import liberator
-        >>> lib = liberator.closer.Liberator()
+        >>> lib = liberator.core.Liberator()
         >>> lib.add_dynamic(mmdet.models.backbones.HRNet)
         >>> print(lib.current_sourcecode())
         >>> visitor = ub.peek(lib.visitors.values())
@@ -1179,7 +1179,7 @@ class ImportVisitor(ast.NodeVisitor, ub.NiceRepr):
     def _import_from_definition(visitor, node):
         """
         Ignore:
-            from liberator.closer import *
+            from liberator.core import *
             visitor = ImportVisitor.parse(module=module)
             print('visitor.definitions = {}'.format(ub.repr2(visitor.definitions, sv=1)))
         """
@@ -1235,9 +1235,9 @@ def _closefile(fpath, modnames):
     An api to remove dependencies from code by "closing" them.
 
     CommandLine:
-        xdoctest -m ~/code/liberator/closer.py _closefile
-        xdoctest -m liberator.closer _closefile --fpath=~/code/boltons/tests/test_cmdutils.py --modnames=ubelt,
-        xdoctest -m liberator.closer _closefile --fpath=~/code/dvc/dvc/updater.py --modnames=dvc,
+        xdoctest -m ~/code/liberator/core.py _closefile
+        xdoctest -m liberator.core _closefile --fpath=~/code/boltons/tests/test_cmdutils.py --modnames=ubelt,
+        xdoctest -m liberator.core _closefile --fpath=~/code/dvc/dvc/updater.py --modnames=dvc,
 
     Example:
         >>> # SCRIPT
