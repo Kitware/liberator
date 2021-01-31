@@ -12,3 +12,6 @@ Liberator - static code extractor for Python
 * Removed 2.7 and 3.5 support
 * Slightly better support for unparsing multiline strings 
 * Experimental `close2` method
+
+* Nested imports are now extracted and logged (useful for maintaining
+  dependencies)

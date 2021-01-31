@@ -112,7 +112,36 @@ class Liberator(ub.NiceRepr):
         I think its actually impossible to statically account for this case in
         general.
 
+    Example:
+        >>> import ubelt as ub
+        >>> from liberator.core import Liberator
+        >>> lib = Liberator()
+        >>> lib.add_dynamic(ub.find_exe, eager=False)
+        >>> print(lib.current_sourcecode())
+
+        >>> lib = Liberator()
+        >>> lib.add_dynamic(ub.find_exe, eager=True)
+        >>> print(lib.current_sourcecode())
+
+        >>> lib = Liberator(logger=3, tag='mytest')
+        >>> lib.add_dynamic(ub.Cacher, eager=True)
+        >>> visitor = ub.peek(lib.visitors.values())
+        >>> print('visitor.definitions = {}'.format(ub.repr2(ub.map_keys(str, visitor.definitions), nl=1)))
+        >>> print('visitor.nested_definitions = {}'.format(ub.repr2(ub.map_keys(str, visitor.nested_definitions), nl=1)))
+
+        >>> lib._print_logs()
+        >>> lib.expand(['ubelt'])
+
+        from ubelt import _win32_links
+        lib = Liberator()
+        lib.add_dynamic(_win32_links._win32_symlink, eager=True)
+        print(lib.current_sourcecode())
+        definitions = list(visitor.definitions.values())
+        import_defs = [d for d in definitions if 'Import' in d.type]
+        print('import_defs = {}'.format(ub.repr2(import_defs, nl=1)))
+
     Ignore:
+        >>> # xdoctest: +REQUIRES(module:fastai)
         >>> from liberator.core import *
         >>> import fastai.vision
         >>> obj = fastai.vision.models.WideResNet
@@ -124,6 +153,7 @@ class Liberator(ub.NiceRepr):
         >>> print(lib.current_sourcecode())
 
     Ignore:
+        >>> # xdoctest: +REQUIRES(module:fastai)
         >>> from liberator.core import Liberator
         >>> from fastai.vision.models import unet
         >>> lib = Liberator()
@@ -132,6 +162,7 @@ class Liberator(ub.NiceRepr):
         >>> print(lib.current_sourcecode())
 
     Ignore:
+        >>> # xdoctest: +REQUIRES(module:netharn)
         >>> from liberator.core import *
         >>> import netharn as nh
         >>> from netharn.models.yolo2 import yolo2
@@ -196,8 +227,8 @@ class Liberator(ub.NiceRepr):
             modpath = module.__file__
 
         if modpath not in lib.visitors:
-            visitor = ImportVisitor.parse(module=module, modpath=modpath,
-                                          logger=lib.logger)
+            visitor = DefinitionVisitor.parse(
+                module=module, modpath=modpath, logger=lib.logger)
             lib.visitors[modpath] = visitor
         visitor = lib.visitors[modpath]
         return visitor
@@ -266,7 +297,8 @@ class Liberator(ub.NiceRepr):
             lib.info(' * undefined_names = {}'.format(names))
             if names == prev_names:
                 for visitor in visitors:
-                    lib.info('visitor.definitions = {}'.format(ub.repr2(visitor.definitions, si=1)))
+                    lib.info('visitor.definitions = {}'.format(ub.repr2(
+                        ub.map_keys(str, visitor.definitions), si=1, nl=1)))
                 if 0:
                     warnings.warn('We were unable do do anything about undefined names')
                     return
@@ -332,7 +364,8 @@ class Liberator(ub.NiceRepr):
             names = sorted(undefined_names(current_sourcecode))
             lib.info(' * undefined_names = {}'.format(names))
             if names == prev_names:
-                lib.info('visitor.definitions = {}'.format(ub.repr2(visitor.definitions, si=1)))
+                lib.info('visitor.definitions = {}'.format(ub.repr2(
+                    ub.map_keys(str, visitor.definitions), si=1, nl=1)))
                 if 0:
                     warnings.warn('We were unable do do anything about undefined names')
                     return
@@ -448,7 +481,7 @@ class Liberator(ub.NiceRepr):
 
             flag = False
             # current_sourcecode = lib.current_sourcecode()
-            # closed_visitor = ImportVisitor.parse(source=current_sourcecode)
+            # closed_visitor = DefinitionVisitor.parse(source=current_sourcecode)
             for root in expand_names:
                 needs_expansion = expandable_definitions.get(root, [])
 
@@ -522,7 +555,7 @@ class Liberator(ub.NiceRepr):
             d (Definition): the definition to expand
         """
         # current_sourcecode = lib.current_sourcecode()
-        # closed_visitor = ImportVisitor.parse(source=current_sourcecode)
+        # closed_visitor = DefinitionVisitor.parse(source=current_sourcecode)
         assert 'Import' in d.type
         varname = d.name
         varmodpath = ub.modname_to_modpath(d.absname)
@@ -937,7 +970,7 @@ class AttributeAccessVisitor(ast.NodeVisitor):
             ''')
         >>> print(ub.repr2(undefined_names(sourcecode), nl=0))
 
-        from liberator.core import ImportVisitor  # NOQA
+        from liberator.core import DefinitionVisitor  # NOQA
         pt = ast.parse(sourcecode)
 
         node1 = pt.body[0].bases[0]
@@ -967,7 +1000,7 @@ class AttributeAccessVisitor(ast.NodeVisitor):
         # self.generic_visit(node)
 
 
-class ImportVisitor(ast.NodeVisitor, ub.NiceRepr):
+class DefinitionVisitor(ast.NodeVisitor, ub.NiceRepr):
     """
     Used to search for dependencies in the original module
 
@@ -976,6 +1009,7 @@ class ImportVisitor(ast.NodeVisitor, ub.NiceRepr):
 
     Example:
         >>> from liberator.core import *
+        >>> from liberator.core import DefinitionVisitor
         >>> from liberator import core
         >>> modpath = core.__file__
         >>> sourcecode = ub.codeblock(
@@ -991,7 +1025,7 @@ class ImportVisitor(ast.NodeVisitor, ub.NiceRepr):
         ...     from n import o, p, q
         ...     r = 3
         ...     ''')
-        >>> visitor = ImportVisitor.parse(source=sourcecode, modpath=modpath)
+        >>> visitor = DefinitionVisitor.parse(source=sourcecode, modpath=modpath)
         >>> print(ub.repr2(visitor.definitions, si=1))
 
     Example:
@@ -1007,11 +1041,33 @@ class ImportVisitor(ast.NodeVisitor, ub.NiceRepr):
                 def foo():
                     return 'bar'
         ...     ''')
-        >>> visitor = ImportVisitor.parse(source=sourcecode, modpath=modpath)
+        >>> visitor = DefinitionVisitor.parse(source=sourcecode, modpath=modpath)
         >>> print(ub.repr2(visitor.definitions, si=1))
 
+    Example:
+        >>> from liberator.core import *
+        >>> from liberator.core import DefinitionVisitor
+        >>> from liberator import core
+        >>> modpath = core.__file__
+        >>> sourcecode = ub.codeblock(
+                '''
+                import kwarray
+
+                def global_import(func):
+                    kwarray.ensure_rng(1)
+
+                def nested_import():
+                    import ubelt as ub
+                    return ub.Cacher
+        ...     ''')
+        >>> visitor = DefinitionVisitor.parse(source=sourcecode, modpath=modpath)
+        >>> print(ub.repr2(list(visitor.definitions), si=1))
+        >>> print(ub.repr2(list(visitor.nested_definitions), si=1))
+
     Ignore:
+        >>> # xdoctest: +REQUIRES(module:mmdet)
         >>> import mmdet
+        >>> import mmdet.models
         >>> import liberator
         >>> lib = liberator.core.Liberator()
         >>> lib.add_dynamic(mmdet.models.backbones.HRNet)
@@ -1025,7 +1081,7 @@ class ImportVisitor(ast.NodeVisitor, ub.NiceRepr):
 
     def __init__(visitor, modpath=None, modname=None, module=None, pt=None,
                  logger=None):
-        super(ImportVisitor, visitor).__init__()
+        super(DefinitionVisitor, visitor).__init__()
         visitor.pt = pt
         visitor.modpath = modpath
         visitor.modname = modname
@@ -1035,7 +1091,8 @@ class ImportVisitor(ast.NodeVisitor, ub.NiceRepr):
 
         import pygtrie
         visitor.definitions = pygtrie.StringTrie(separator='.')
-        visitor.top_level = True
+        visitor.nested_definitions = pygtrie.StringTrie(separator='.')
+        visitor.level = 0
 
     def __nice__(self):
         if self.modname is not None:
@@ -1044,7 +1101,7 @@ class ImportVisitor(ast.NodeVisitor, ub.NiceRepr):
             return "<sourcecode>"
 
     @classmethod
-    def parse(ImportVisitor, source=None, modpath=None, modname=None,
+    def parse(DefinitionVisitor, source=None, modpath=None, modname=None,
               module=None, logger=None):
         if module is not None:
             if source is None:
@@ -1083,7 +1140,8 @@ class ImportVisitor(ast.NodeVisitor, ub.NiceRepr):
                     raise
         else:
             pt = ast.parse(source)
-        visitor = ImportVisitor(modpath, modname, module, pt=pt, logger=logger)
+        visitor = DefinitionVisitor(modpath, modname, module, pt=pt,
+                                    logger=logger)
         visitor.visit(pt)
 
         # Hack in attribute visiting
@@ -1103,15 +1161,23 @@ class ImportVisitor(ast.NodeVisitor, ub.NiceRepr):
 
     def visit_Import(visitor, node):
         for d in visitor._import_definitions(node):
-            visitor.definitions[d.name] = d
+            if visitor.level == 0:
+                visitor.definitions[d.name] = d
+            else:
+                visitor.nested_definitions[d.name] = d
         visitor.generic_visit(node)
 
     def visit_ImportFrom(visitor, node):
         for d in visitor._import_from_definition(node):
-            visitor.definitions[d.name] = d
+            if visitor.level == 0:
+                visitor.definitions[d.name] = d
+            else:
+                visitor.nested_definitions[d.name] = d
         visitor.generic_visit(node)
 
     def visit_Assign(visitor, node):
+        if visitor.level > 0:
+            return
         for target in node.targets:
             key = getattr(target, 'id', None)
             if key is not None:
@@ -1127,39 +1193,64 @@ class ImportVisitor(ast.NodeVisitor, ub.NiceRepr):
                         # OVERLOADED
                         visitor.logger.debug('OVERLOADED key = {!r}'.format(key))
 
-                visitor.definitions[key] = Definition(
+                definition = Definition(
                     key, node, code=code, type='Assign',
                     modpath=visitor.modpath,
                     modname=visitor.modname,
                     absname=visitor.modname + '.' + key,
                     native_modname=visitor.modname,
                 )
+                if visitor.level == 0:
+                    visitor.definitions[key] = definition
+                # else:
+                #     visitor.nested_definitions[key] = definition
 
     def visit_FunctionDef(visitor, node):
-        visitor.definitions[node.name] = Definition(
+        defenition = Definition(
             node.name, node, type='FunctionDef',
             modpath=visitor.modpath,
             modname=visitor.modname,
             absname=visitor.modname + '.' + node.name,
             native_modname=visitor.modname,
         )
-        # Ignore any non-top-level imports
-        if not visitor.top_level:
+        if visitor.level == 0:
+            visitor.definitions[node.name] = defenition
+        else:
+            # visitor.nested_definitions[node.name] = defenition
+            pass
+
+        if visitor.level == 0:
+            visitor.level += 1
             visitor.generic_visit(node)
-            # ast.NodeVisitor.generic_visit(visitor, node)
+            visitor.level -= 1
+        else:
+            visitor.generic_visit(node)
+        # ast.NodeVisitor.generic_visit(visitor, node)
 
     def visit_ClassDef(visitor, node):
-        visitor.definitions[node.name] = Definition(
+        defenition = Definition(
             node.name, node, type='ClassDef',
             modpath=visitor.modpath,
             modname=visitor.modname,
             absname=visitor.modname + '.' + node.name,
             native_modname=visitor.modname,
         )
-        # Ignore any non-top-level imports
-        if not visitor.top_level:
+        if visitor.level == 0:
+            visitor.definitions[node.name] = defenition
+        else:
+            # visitor.nested_definitions[node.name] = defenition
+            pass
+
+        if visitor.level == 0:
+            visitor.level += 1
             visitor.generic_visit(node)
-            # ast.NodeVisitor.generic_visit(visitor, node)
+            visitor.level -= 1
+        else:
+            visitor.generic_visit(node)
+
+        # # Ignore any non-top-level imports
+        # if not visitor.level == 0:
+        #     # ast.NodeVisitor.generic_visit(visitor, node)
 
     def _import_definitions(visitor, node):
         for alias in node.names:
@@ -1180,7 +1271,7 @@ class ImportVisitor(ast.NodeVisitor, ub.NiceRepr):
         """
         Ignore:
             from liberator.core import *
-            visitor = ImportVisitor.parse(module=module)
+            visitor = DefinitionVisitor.parse(module=module)
             print('visitor.definitions = {}'.format(ub.repr2(visitor.definitions, sv=1)))
         """
         if node.level:
@@ -1217,7 +1308,7 @@ class ImportVisitor(ast.NodeVisitor, ub.NiceRepr):
             if varname == '*':
                 # HACK
                 abs_modpath = ub.modname_to_modpath(abs_modname)
-                star_visitor = ImportVisitor.parse(
+                star_visitor = DefinitionVisitor.parse(
                     modpath=abs_modpath, logger=visitor.logger)
                 for d in star_visitor.definitions.values():
                     if not d.name.startswith('_'):
