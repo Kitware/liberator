@@ -192,7 +192,7 @@ class Liberator(ub.NiceRepr):
         lib.logger.debug(msg)
 
     def _print_logs(lib):
-        lib.logger.print_logs()
+        lib.logger._print_logs()
 
     def __nice__(self):
         return self.tag
