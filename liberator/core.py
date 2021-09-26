@@ -50,6 +50,14 @@ class LocalLogger:
         self.logs = []
         self.tag = tag
         self.indent = ''
+        if verbose >= 2:
+            self.debug('init new logger')
+
+    def warn(self, msg):
+        line = '[WARN.{}] '.format(self.tag) + self.indent + msg
+        self.logs.append(line)
+        if self.verbose >= 0:
+            print(line)
 
     def error(self, msg):
         line = '[ERROR.{}] '.format(self.tag) + self.indent + msg
@@ -112,10 +120,15 @@ class Liberator(ub.NiceRepr):
         I think its actually impossible to statically account for this case in
         general.
 
+    Args:
+        tag (str): logging tag
+        logger (Callable): logging function
+        verbose (int): verbosity, 0 is nothing, 1 is info, 2 is debug, etc..
+
     Example:
         >>> import ubelt as ub
         >>> from liberator.core import Liberator
-        >>> lib = Liberator()
+        >>> lib = Liberator(logger=print)
         >>> lib.add_dynamic(ub.find_exe, eager=False)
         >>> print(lib.current_sourcecode())
 
@@ -174,11 +187,11 @@ class Liberator(ub.NiceRepr):
         >>> #print(ub.repr2(lib.body_defs, si=1))
         >>> print(lib.current_sourcecode())
     """
-    def __init__(lib, tag='root', logger=None):
+    def __init__(lib, tag='root', logger=None, verbose=0):
         lib.header_defs = ub.odict()
         lib.body_defs = ub.odict()
         lib.visitors = {}
-        lib.logger = LocalLogger.coerce(logger, tag=tag)
+        lib.logger = LocalLogger.coerce(logger, tag=tag, verbose=verbose)
 
         lib._lazy_visitors = []
 
@@ -191,14 +204,17 @@ class Liberator(ub.NiceRepr):
     def debug(lib, msg):
         lib.logger.debug(msg)
 
+    def warn(lib, msg):
+        lib.logger.warn(msg)
+
     def _print_logs(lib):
         lib.logger._print_logs()
 
     def __nice__(self):
-        return self.tag
+        return self.logger.tag
 
     def _add_definition(lib, d):
-        lib.info('_add_definition = {!r}'.format(d))
+        lib.debug('_add_definition = {!r}'.format(d))
         d = copy.deepcopy(d)
         # print('ADD DEFINITION d = {!r}'.format(d))
         if 'Import' in d.type:
@@ -284,7 +300,7 @@ class Liberator(ub.NiceRepr):
         """
         # Parse the parent module to find only the relevant global varaibles and
         # include those in the extracted source code.
-        lib.info('closing')
+        lib.debug('closing')
 
         # Loop until all undefined names are defined
         names = True
@@ -294,10 +310,10 @@ class Liberator(ub.NiceRepr):
             # Make sure we process names in the same order for hashability
             prev_names = names
             names = sorted(undefined_names(current_sourcecode))
-            lib.info(' * undefined_names = {}'.format(names))
+            lib.debug(' * undefined_names = {}'.format(names))
             if names == prev_names:
                 for visitor in visitors:
-                    lib.info('visitor.definitions = {}'.format(ub.repr2(
+                    lib.debug('visitor.definitions = {}'.format(ub.repr2(
                         ub.map_keys(str, visitor.definitions), si=1, nl=1)))
                 if 0:
                     warnings.warn('We were unable do do anything about undefined names')
@@ -318,27 +334,27 @@ class Liberator(ub.NiceRepr):
                         if name in visitor.definitions:
                             break
                     try:
-                        lib.info(' * try visitor.extract_definition({})'.format(name))
+                        lib.debug(' * try visitor.extract_definition({})'.format(name))
                         d = visitor.extract_definition(name)
                     except KeyError as ex:
-                        lib.info(' * encountered issue: {!r}'.format(ex))
+                        lib.warn(' * encountered issue: {!r}'.format(ex))
                         # There is a corner case where we have the definition,
                         # we just need to move it to the top.
                         flag = False
                         for d_ in lib.body_defs.values():
                             if name == d_.name:
-                                lib.info(' * corner case: move definition to top')
+                                lib.warn(' * corner case: move definition to top')
                                 lib._add_definition(d_)
                                 flag = True
                                 break
                         if not flag:
                             raise
                     else:
-                        lib.info(' * add extracted def {}'.format(name))
+                        lib.debug(' * add extracted def {}'.format(name))
                         lib._add_definition(d)
                         # type_, text = visitor.extract_definition(name)
                 except Exception as ex:
-                    lib.info(' * unable to extracted def {} due to {!r}'.format(name, ex))
+                    lib.warn(' * unable to extracted def {} due to {!r}'.format(name, ex))
                     # current_sourcecode = lib.current_sourcecode()
                     lib.error('--- <ERROR[3]> ---')
                     lib.error('Error computing source code extract_definition')
@@ -352,7 +368,7 @@ class Liberator(ub.NiceRepr):
         """
         # Parse the parent module to find only the relevant global varaibles and
         # include those in the extracted source code.
-        lib.info('closing')
+        lib.info('closing - i.e. populating, crawling')
 
         # Loop until all undefined names are defined
         names = True
@@ -362,9 +378,9 @@ class Liberator(ub.NiceRepr):
             # Make sure we process names in the same order for hashability
             prev_names = names
             names = sorted(undefined_names(current_sourcecode))
-            lib.info(' * undefined_names = {}'.format(names))
+            lib.debug(' * undefined_names = {}'.format(names))
             if names == prev_names:
-                lib.info('visitor.definitions = {}'.format(ub.repr2(
+                lib.debug('visitor.definitions = {}'.format(ub.repr2(
                     ub.map_keys(str, visitor.definitions), si=1, nl=1)))
                 if 0:
                     warnings.warn('We were unable do do anything about undefined names')
@@ -381,16 +397,16 @@ class Liberator(ub.NiceRepr):
                 try:
                     try:
                         # pass
-                        lib.info(' * try visitor.extract_definition({})'.format(name))
+                        lib.debug(' * try visitor.extract_definition({})'.format(name))
                         d = visitor.extract_definition(name)
                     except KeyError as ex:
-                        lib.info(' * encountered issue: {!r}'.format(ex))
+                        lib.debug(' * encountered issue: {!r}'.format(ex))
                         # There is a corner case where we have the definition,
                         # we just need to move it to the top.
                         flag = False
                         for d_ in lib.body_defs.values():
                             if name == d_.name:
-                                lib.info(' * corner case: move definition to top')
+                                lib.debug(' * corner case: move definition to top')
                                 lib._add_definition(d_)
                                 flag = True
                                 break
@@ -403,17 +419,17 @@ class Liberator(ub.NiceRepr):
                         if visitor.definitions.has_subtrie(name):
                             flag = True
                             for k, d in visitor.definitions.items(name):
-                                lib.info(' * add extracted prefix def {} for {}'.format(k, name))
+                                lib.debug(' * add extracted prefix def {} for {}'.format(k, name))
                                 lib._add_definition(d)
 
                         if not flag:
                             raise
                     else:
-                        lib.info(' * add extracted def {}'.format(name))
+                        lib.debug(' * add extracted def {}'.format(name))
                         lib._add_definition(d)
                     # type_, text = visitor.extract_definition(name)
                 except Exception as ex:
-                    lib.info(' * unable to extracted def {} due to {!r}'.format(name, ex))
+                    lib.warn(' * unable to extracted def {} due to {!r}'.format(name, ex))
                     # current_sourcecode = lib.current_sourcecode()
                     lib.error('--- <ERROR[2]> ---')
                     lib.error('Error computing source code extract_definition')
@@ -459,9 +475,9 @@ class Liberator(ub.NiceRepr):
             >>> text = lib.current_sourcecode()
             >>> print(text)
         """
-        lib.info('\n\n')
-        lib.info('====\n\n')
-        lib.info("!!! EXPANDING")
+        lib.debug('\n\n')
+        lib.debug('====\n\n')
+        lib.debug("!!! EXPANDING")
         # Expand references to internal modules
         flag = True
         while flag:
@@ -476,7 +492,7 @@ class Liberator(ub.NiceRepr):
                     root = '.'.join(parts[:i])
                     expandable_definitions[root].append(d)
 
-            lib.info('expandable_definitions = {!r}'.format(
+            lib.debug('expandable_definitions = {!r}'.format(
                 list(expandable_definitions.keys())))
 
             flag = False
@@ -485,8 +501,8 @@ class Liberator(ub.NiceRepr):
             for root in expand_names:
                 needs_expansion = expandable_definitions.get(root, [])
 
-                lib.info('root = {!r}'.format(root))
-                lib.info('needs_expansion = {!r}'.format(needs_expansion))
+                lib.debug('root = {!r}'.format(root))
+                lib.debug('needs_expansion = {!r}'.format(needs_expansion))
                 for d in needs_expansion:
                     if d._expanded:
                         continue
@@ -547,7 +563,7 @@ class Liberator(ub.NiceRepr):
 
                             # print('sub_visitor = {!r}'.format(sub_visitor))
                             # lib.close(sub_visitor)
-                            lib.info('CLOSED attribute d = {}'.format(d))
+                            lib.debug('CLOSED attribute d = {}'.format(d))
 
     def expand_module_attributes(lib, d):
         """
@@ -562,7 +578,7 @@ class Liberator(ub.NiceRepr):
         modname = d.absname
 
         def _exhaust(varname, modname, modpath):
-            lib.info('REWRITE ACCESSOR varname={!r}, modname={}, modpath={}'.format(varname, modname, modpath))
+            lib.debug('REWRITE ACCESSOR varname={!r}, modname={}, modpath={}'.format(varname, modname, modpath))
 
             # Modify the current node definitions and recompute code
             # TODO: make more robust
@@ -571,7 +587,7 @@ class Liberator(ub.NiceRepr):
                 rewriter.visit(d_.node)
                 d_._code = unparse(d_.node)
 
-            lib.info('rewriter.accessed_attrs = {!r}'.format(rewriter.accessed_attrs))
+            lib.debug('rewriter.accessed_attrs = {!r}'.format(rewriter.accessed_attrs))
 
             # For each modified attribute, copy in the appropriate source.
             for subname in rewriter.accessed_attrs:
@@ -580,11 +596,11 @@ class Liberator(ub.NiceRepr):
                 if submodpath is not None:
                     # if the accessor is to another module, exhaust until
                     # we reach a non-module
-                    lib.info('EXAUSTING: {}, {}, {}'.format(subname, submodname, submodpath))
+                    lib.debug('EXAUSTING: {}, {}, {}'.format(subname, submodname, submodpath))
                     _exhaust(subname, submodname, submodpath)
                 else:
                     # Otherwise we can directly add the referenced attribute
-                    lib.info('FINALIZE: {} from {}'.format(subname, modpath))
+                    lib.debug('FINALIZE: {} from {}'.format(subname, modpath))
                     lib.add_static(subname, modpath)
 
         _exhaust(varname, modname, varmodpath)
