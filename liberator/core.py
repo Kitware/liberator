@@ -257,6 +257,15 @@ class Liberator(ub.NiceRepr):
             obj (object): a reference to a class or function
 
             eager (bool): experimental
+
+        Example:
+            >>> from liberator import core
+            >>> import liberator
+            >>> obj = core.unparse
+            >>> eager = True
+            >>> lib = liberator.Liberator()
+            >>> lib.add_dynamic(obj, eager=eager)
+            >>> print(lib.current_sourcecode())
         """
         lib.info('\n\n')
         lib.info('====\n\n')
@@ -278,6 +287,23 @@ class Liberator(ub.NiceRepr):
             lib._lazy_visitors.append(visitor)
 
     def add_static(lib, name, modpath):
+        """
+        Statically extract a definition from a module file
+
+        Args:
+            name (str): the name of the member of the module to define
+
+            modpath (PathLike): The path to the module
+
+        Example:
+            >>> from liberator import core
+            >>> import liberator
+            >>> modpath = core.__file__
+            >>> name = core.unparse.__name__
+            >>> lib = liberator.Liberator()
+            >>> lib.add_static(name, modpath)
+            >>> print(lib.current_sourcecode())
+        """
         # print('ADD_STATIC name = {} from {}'.format(name, modpath))
         lib.info('lib.add_static(name={!r}, modpath={!r})'.format(name, modpath))
 
@@ -798,10 +824,12 @@ def undefined_names(sourcecode):
     """
     Parses source code for undefined names
 
+    Args:
+        sourcecode (str):
+
     Example:
         >>> print(ub.repr2(undefined_names('x = y'), nl=0))
         {'y'}
-
     """
     import pyflakes.api
     import pyflakes.reporter
