@@ -1,5 +1,5 @@
-astunparse
-six
-ubelt
+astunparse >= 1.6.3
+six >= 1.16.0
+ubelt >= 1.1.2
 pyflakes >= 2.2.0
 pygtrie >= 2.3.3
