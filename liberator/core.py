@@ -825,9 +825,13 @@ def undefined_names(sourcecode):
     Parses source code for undefined names
 
     Args:
-        sourcecode (str):
+        sourcecode (str): code to check for unused names
+
+    Returns:
+        Set[str]: the unused variable names
 
     Example:
+        >>> # xdoctest: +REQUIRES(module:pyflakes)
         >>> print(ub.repr2(undefined_names('x = y'), nl=0))
         {'y'}
     """
