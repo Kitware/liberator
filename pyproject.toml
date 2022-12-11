@@ -11,10 +11,9 @@ repo_name = "liberator"
 rel_mod_parent_dpath = "."
 os = [ "linux", "osx", "all", "win",]
 min_python = 3.7
-version = "0.0.1"
 author = "joncrall"
 author_email = "jon.crall@kitware.com"
-description = "A module cut from xcookie"
+description = "static code extractor for Python"
 license = "Apache 2"
 dev_status = "planning"
 
