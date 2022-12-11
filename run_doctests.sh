@@ -1,2 +1,2 @@
-#!/bin/bash
-xdoctest liberator --style=google all
+#!/usr/bin/env bash
+xdoctest liberator --style=google all "$@"
