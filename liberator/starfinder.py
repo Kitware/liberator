@@ -6,9 +6,7 @@ def find_import_stars(text):
         text (str): the python code to refactor
 
     Example:
-        >>> import ubelt as ub
-        >>> import sys, ubelt
-        >>> sys.path.append(ubelt.expandpath('~/code/liberator'))
+        >>> # xdoctest: +REQUIRES(module:parso)
         >>> from liberator.starfinder import *  # NOQA
         >>> text = ub.codeblock(
         >>>     '''
