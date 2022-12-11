@@ -485,6 +485,7 @@ class Liberator(ub.NiceRepr):
 
         Ignore:
             >>> # Test a heavier duty class
+            >>> # xdoctest: +REQUIRES(module:netharn)
             >>> from liberator.core import *
             >>> import netharn as nh
             >>> obj = nh.device.MountedModel
@@ -712,6 +713,7 @@ def source_closure(obj, expand_names=[]):
         xdoctest -m liberator.core source_closure
 
     Example:
+        >>> # xdoctest: +REQUIRES(module:torchvision)
         >>> import torchvision
         >>> from torchvision import models
         >>> got = {}
@@ -757,6 +759,7 @@ def source_closure(obj, expand_names=[]):
 
     Example:
         >>> # Test a heavier duty class
+        >>> # xdoctest: +REQUIRES(module:netharn)
         >>> from liberator.core import *
         >>> import netharn as nh
         >>> obj = nh.layers.ConvNormNd
