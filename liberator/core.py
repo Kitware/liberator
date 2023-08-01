@@ -139,8 +139,8 @@ class Liberator(ub.NiceRepr):
         >>> lib = Liberator(logger=3, tag='mytest')
         >>> lib.add_dynamic(ub.Cacher, eager=True)
         >>> visitor = ub.peek(lib.visitors.values())
-        >>> print('visitor.definitions = {}'.format(ub.repr2(ub.map_keys(str, visitor.definitions), nl=1)))
-        >>> print('visitor.nested_definitions = {}'.format(ub.repr2(ub.map_keys(str, visitor.nested_definitions), nl=1)))
+        >>> print('visitor.definitions = {}'.format(ub.urepr(ub.map_keys(str, visitor.definitions), nl=1)))
+        >>> print('visitor.nested_definitions = {}'.format(ub.urepr(ub.map_keys(str, visitor.nested_definitions), nl=1)))
 
         >>> lib._print_logs()
         >>> lib.expand(['ubelt'])
@@ -151,7 +151,7 @@ class Liberator(ub.NiceRepr):
         print(lib.current_sourcecode())
         definitions = list(visitor.definitions.values())
         import_defs = [d for d in definitions if 'Import' in d.type]
-        print('import_defs = {}'.format(ub.repr2(import_defs, nl=1)))
+        print('import_defs = {}'.format(ub.urepr(import_defs, nl=1)))
 
     Ignore:
         >>> # xdoctest: +REQUIRES(module:fastai)
@@ -162,7 +162,7 @@ class Liberator(ub.NiceRepr):
         >>> lib = Liberator()
         >>> lib.add_dynamic(obj)
         >>> lib.expand(expand_names)
-        >>> #print(ub.repr2(lib.body_defs, si=1))
+        >>> #print(ub.urepr(lib.body_defs, si=1))
         >>> print(lib.current_sourcecode())
 
     Ignore:
@@ -184,7 +184,7 @@ class Liberator(ub.NiceRepr):
         >>> lib = Liberator()
         >>> lib.add_static(obj.__name__, sys.modules[obj.__module__].__file__)
         >>> lib.expand(expand_names)
-        >>> #print(ub.repr2(lib.body_defs, si=1))
+        >>> #print(ub.urepr(lib.body_defs, si=1))
         >>> print(lib.current_sourcecode())
     """
     def __init__(lib, tag='root', logger=None, verbose=0):
@@ -339,7 +339,7 @@ class Liberator(ub.NiceRepr):
             lib.debug(' * undefined_names = {}'.format(names))
             if names == prev_names:
                 for visitor in visitors:
-                    lib.debug('visitor.definitions = {}'.format(ub.repr2(
+                    lib.debug('visitor.definitions = {}'.format(ub.urepr(
                         ub.map_keys(str, visitor.definitions), si=1, nl=1)))
                 if 0:
                     warnings.warn('We were unable do do anything about undefined names')
@@ -406,7 +406,7 @@ class Liberator(ub.NiceRepr):
             names = sorted(undefined_names(current_sourcecode))
             lib.debug(' * undefined_names = {}'.format(names))
             if names == prev_names:
-                lib.debug('visitor.definitions = {}'.format(ub.repr2(
+                lib.debug('visitor.definitions = {}'.format(ub.urepr(
                     ub.map_keys(str, visitor.definitions), si=1, nl=1)))
                 if 0:
                     warnings.warn('We were unable do do anything about undefined names')
@@ -496,8 +496,8 @@ class Liberator(ub.NiceRepr):
             >>> lib = Liberator()
             >>> lib.add_dynamic(obj)
             >>> lib.expand(expand_names)
-            >>> #print('header_defs = ' + ub.repr2(lib.header_defs, si=1))
-            >>> #print('body_defs = ' + ub.repr2(lib.body_defs, si=1))
+            >>> #print('header_defs = ' + ub.urepr(lib.header_defs, si=1))
+            >>> #print('body_defs = ' + ub.urepr(lib.body_defs, si=1))
             >>> print('SOURCE:')
             >>> text = lib.current_sourcecode()
             >>> print(text)
@@ -529,7 +529,9 @@ class Liberator(ub.NiceRepr):
                 needs_expansion = expandable_definitions.get(root, [])
 
                 lib.debug('root = {!r}'.format(root))
-                lib.debug('needs_expansion = {!r}'.format(needs_expansion))
+                lib.debug('needs_expansion = {}'.format(ub.urepr(needs_expansion, nl=1)))
+
+                d: Definition
                 for d in needs_expansion:
                     if d._expanded:
                         continue
@@ -562,6 +564,7 @@ class Liberator(ub.NiceRepr):
                             sub_lib = Liberator(lib.logger.tag + '.sub.' + d.name,
                                                 logger=lib.logger)
                             sub_lib.add_static(d.name, native_modpath)
+                            print(f'native_modpath={native_modpath}')
                             # sub_visitor = sub_lib.visitors[d.native_modname]
                             sub_lib.expand(expand_names)
 
@@ -835,7 +838,7 @@ def undefined_names(sourcecode):
 
     Example:
         >>> # xdoctest: +REQUIRES(module:pyflakes)
-        >>> print(ub.repr2(undefined_names('x = y'), nl=0))
+        >>> print(ub.urepr(undefined_names('x = y'), nl=0))
         {'y'}
     """
     import pyflakes.api
@@ -1019,7 +1022,7 @@ class AttributeAccessVisitor(ast.NodeVisitor):
             def blah():
                 return foo.bar.BAZ()
             ''')
-        >>> print(ub.repr2(undefined_names(sourcecode), nl=0))
+        >>> print(ub.urepr(undefined_names(sourcecode), nl=0))
 
         from liberator.core import DefinitionVisitor  # NOQA
         pt = ast.parse(sourcecode)
@@ -1077,7 +1080,7 @@ class DefinitionVisitor(ast.NodeVisitor, ub.NiceRepr):
         ...     r = 3
         ...     ''')
         >>> visitor = DefinitionVisitor.parse(source=sourcecode, modpath=modpath)
-        >>> print(ub.repr2(visitor.definitions, si=1))
+        >>> print(ub.urepr(visitor.definitions, si=1))
 
     Example:
         >>> from liberator.core import *
@@ -1093,7 +1096,7 @@ class DefinitionVisitor(ast.NodeVisitor, ub.NiceRepr):
                     return 'bar'
         ...     ''')
         >>> visitor = DefinitionVisitor.parse(source=sourcecode, modpath=modpath)
-        >>> print(ub.repr2(visitor.definitions, si=1))
+        >>> print(ub.urepr(visitor.definitions, si=1))
 
     Example:
         >>> from liberator.core import *
@@ -1112,8 +1115,8 @@ class DefinitionVisitor(ast.NodeVisitor, ub.NiceRepr):
                     return ub.Cacher
         ...     ''')
         >>> visitor = DefinitionVisitor.parse(source=sourcecode, modpath=modpath)
-        >>> print(ub.repr2(list(visitor.definitions), si=1))
-        >>> print(ub.repr2(list(visitor.nested_definitions), si=1))
+        >>> print(ub.urepr(list(visitor.definitions), si=1))
+        >>> print(ub.urepr(list(visitor.nested_definitions), si=1))
 
     Ignore:
         >>> # xdoctest: +REQUIRES(module:mmdet)
@@ -1124,10 +1127,23 @@ class DefinitionVisitor(ast.NodeVisitor, ub.NiceRepr):
         >>> lib.add_dynamic(mmdet.models.backbones.HRNet)
         >>> print(lib.current_sourcecode())
         >>> visitor = ub.peek(lib.visitors.values())
-        >>> print(ub.repr2(visitor.definitions, si=1))
+        >>> print(ub.urepr(visitor.definitions, si=1))
         >>> d = visitor.definitions['HRNet']
         >>> print(d.code[0:1000])
 
+    Example:
+        >>> from liberator.core import *
+        >>> from liberator.core import DefinitionVisitor
+        >>> from liberator import core
+        >>> modpath = core.__file__
+        >>> # Test case global variables with type annots
+        >>> sourcecode = ub.codeblock(
+                '''
+                GLOBAL_VAR: list = []
+        ...     ''')
+        >>> visitor = DefinitionVisitor.parse(source=sourcecode, modpath=modpath)
+        >>> print(ub.urepr(list(visitor.definitions), si=1))
+        >>> print(ub.urepr(list(visitor.nested_definitions), si=1))
     """
 
     def __init__(visitor, modpath=None, modname=None, module=None, pt=None,
@@ -1226,35 +1242,44 @@ class DefinitionVisitor(ast.NodeVisitor, ub.NiceRepr):
                 visitor.nested_definitions[d.name] = d
         visitor.generic_visit(node)
 
+    def _common_visit_assign(visitor, node, target):
+        print(f'node={node}')
+        key = getattr(target, 'id', None)
+        if key is not None:
+            try:
+                static_val = _parse_static_node_value(node.value)
+                code = '{} = {}'.format(key, ub.urepr(static_val))
+            except TypeError:
+                #code = unparse(node).strip('\n')
+                code = None
+
+            if visitor.logger:
+                if key in visitor.definitions:
+                    # OVERLOADED
+                    visitor.logger.debug('OVERLOADED key = {!r}'.format(key))
+
+            definition = Definition(
+                key, node, code=code, type='Assign',
+                modpath=visitor.modpath,
+                modname=visitor.modname,
+                absname=visitor.modname + '.' + key,
+                native_modname=visitor.modname,
+            )
+            if visitor.level == 0:
+                visitor.definitions[key] = definition
+            # else:
+            #     visitor.nested_definitions[key] = definition
+
+    def visit_AnnAssign(visitor, node):
+        if visitor.level > 0:
+            return
+        visitor._common_visit_assign(node, node.target)
+
     def visit_Assign(visitor, node):
         if visitor.level > 0:
             return
         for target in node.targets:
-            key = getattr(target, 'id', None)
-            if key is not None:
-                try:
-                    static_val = _parse_static_node_value(node.value)
-                    code = '{} = {}'.format(key, ub.repr2(static_val))
-                except TypeError:
-                    #code = unparse(node).strip('\n')
-                    code = None
-
-                if visitor.logger:
-                    if key in visitor.definitions:
-                        # OVERLOADED
-                        visitor.logger.debug('OVERLOADED key = {!r}'.format(key))
-
-                definition = Definition(
-                    key, node, code=code, type='Assign',
-                    modpath=visitor.modpath,
-                    modname=visitor.modname,
-                    absname=visitor.modname + '.' + key,
-                    native_modname=visitor.modname,
-                )
-                if visitor.level == 0:
-                    visitor.definitions[key] = definition
-                # else:
-                #     visitor.nested_definitions[key] = definition
+            visitor._common_visit_assign(node, target)
 
     def visit_FunctionDef(visitor, node):
         defenition = Definition(
@@ -1323,7 +1348,7 @@ class DefinitionVisitor(ast.NodeVisitor, ub.NiceRepr):
         Ignore:
             from liberator.core import *
             visitor = DefinitionVisitor.parse(module=module)
-            print('visitor.definitions = {}'.format(ub.repr2(visitor.definitions, sv=1)))
+            print('visitor.definitions = {}'.format(ub.urepr(visitor.definitions, sv=1)))
         """
         if node.level:
             # Handle relative imports
@@ -1404,7 +1429,7 @@ def _closefile(fpath, modnames):
     for key in calldefs.keys():
         lib.add_static(key, modpath)
     lib.expand(expand_names)
-    #print(ub.repr2(lib.body_defs, si=1))
+    #print(ub.urepr(lib.body_defs, si=1))
     print(lib.current_sourcecode())
 
 

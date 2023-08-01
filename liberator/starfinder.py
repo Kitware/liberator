@@ -8,6 +8,7 @@ def find_import_stars(text):
     Example:
         >>> # xdoctest: +REQUIRES(module:parso)
         >>> from liberator.starfinder import *  # NOQA
+        >>> import ubelt as ub
         >>> text = ub.codeblock(
         >>>     '''
         >>>     import dis as dat
