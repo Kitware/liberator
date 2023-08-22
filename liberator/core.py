@@ -1,25 +1,30 @@
 """
 Extracts relevant parts of the source code
 
-NOTE:
-    IF THE SOURCE CODE CHANGES WHILE THE RUN IS EXECUTING THEN THIS MAY NOT
-    WORK CORRECTLY.
+Note:
+    If the source code changes while the run is executing then this may not
+    work correctly.
 
-# TODO:
-# - [x] Maintain a parse tree instead of raw lines
-# - [x] Keep a mapping from "definition names" to the top-level nodes
-# in the parse tree that define them.
-# - [X] For each extracted node in the parse tree keep track of
-#     - [X] where it came from
-#     - [ ] what modifications were made to it
-# - [ ] Handle expanding imports nested within functions
-# - [ ] Maintain docstring formatting after using the node transformer
+TODO:
+
+- [x] Maintain a parse tree instead of raw lines
+
+- [x] Keep a mapping from "definition names" to the top-level nodes in the parse tree that define them.
+
+- [X] For each extracted node in the parse tree keep track of
+
+    - [X] where it came from
+
+    - [ ] what modifications were made to it
+
+- [ ] Handle expanding imports nested within functions
+
+- [ ] Maintain docstring formatting after using the node transformer
 
 
-ISSUES:
-    - [ ] We currently (0.0.1) get a KeyError in the case where, a module is
-        imported like `import mod.submod` and all usage is of the form
-        `mod.submod.attr`, then
+Issues:
+
+    - [ ] We currently (0.0.1) get a KeyError in the case where, a module is imported like `import mod.submod` and all usage is of the form `mod.submod.attr`, then
 """
 import ast
 import astunparse
@@ -119,13 +124,16 @@ class LocalLogger:
 
 
 class Liberator(ub.NiceRepr):
-    """
+    r"""
     Maintains the current state of the source code
 
     There are 3 major steps:
+
     (a) extract the code to that defines a function or class from a module,
+
     (b) go back to the module and extract extra code required to define any
         names that were undefined in the extracted code, and
+
     (c) replace import statements to specified "expand" modules with the actual code
         used to define the variables accessed via the imports.
 
@@ -166,6 +174,7 @@ class Liberator(ub.NiceRepr):
         >>> lib._print_logs()
         >>> lib.expand(['ubelt'])
 
+    Ignore:
         from ubelt import _win32_links
         lib = Liberator()
         lib.add_dynamic(_win32_links._win32_symlink, eager=True)
@@ -174,7 +183,7 @@ class Liberator(ub.NiceRepr):
         import_defs = [d for d in definitions if 'Import' in d.type]
         print('import_defs = {}'.format(ub.urepr(import_defs, nl=1)))
 
-    Ignore:
+    Example:
         >>> # xdoctest: +REQUIRES(module:fastai)
         >>> from liberator.core import *
         >>> import fastai.vision
@@ -186,7 +195,7 @@ class Liberator(ub.NiceRepr):
         >>> #print(ub.urepr(lib.body_defs, si=1))
         >>> print(lib.current_sourcecode())
 
-    Ignore:
+    Example:
         >>> # xdoctest: +REQUIRES(module:fastai)
         >>> from liberator.core import Liberator
         >>> from fastai.vision.models import unet
@@ -195,7 +204,7 @@ class Liberator(ub.NiceRepr):
         >>> lib.expand(['fastai'])
         >>> print(lib.current_sourcecode())
 
-    Ignore:
+    Example:
         >>> # xdoctest: +REQUIRES(module:netharn)
         >>> from liberator.core import *
         >>> import netharn as nh
@@ -487,14 +496,9 @@ class Liberator(ub.NiceRepr):
 
     def expand(lib, expand_names):
         """
-        Experimental feature. Remove all references to specific modules by
-        directly copying in the referenced source code. If the code is
-        referenced from a module, then the references will need to change as
-        well.
-
-        TODO:
-            - [ ] Add special unique (mangled) suffixes to all expanded names
-                to avoid name conflicts.
+        Remove all references to specific modules by directly copying in the
+        referenced source code. If the code is referenced from a module, then
+        the references will need to change as well.
 
         Args:
             expand_name (List[str]): list of module names. For each module
@@ -505,7 +509,11 @@ class Liberator(ub.NiceRepr):
                 import from C-extension modules and expanding modules with
                 complicated global-level logic.
 
-        Ignore:
+        TODO:
+            - [ ] Add special unique (mangled) suffixes to all expanded names
+                to avoid name conflicts.
+
+        Example:
             >>> # Test a heavier duty class
             >>> # xdoctest: +REQUIRES(module:netharn)
             >>> from liberator.core import *
@@ -1192,7 +1200,7 @@ class DefinitionVisitor(ast.NodeVisitor, ub.NiceRepr):
         >>> print(ub.urepr(list(visitor.definitions), si=1))
         >>> print(ub.urepr(list(visitor.nested_definitions), si=1))
 
-    Ignore:
+    Example:
         >>> # xdoctest: +REQUIRES(module:mmdet)
         >>> import mmdet
         >>> import mmdet.models

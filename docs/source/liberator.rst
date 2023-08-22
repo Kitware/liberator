@@ -1,6 +1,15 @@
 liberator package
 =================
 
+Submodules
+----------
+
+.. toctree::
+   :maxdepth: 4
+
+   liberator.core
+   liberator.starfinder
+
 Module contents
 ---------------
 
@@ -8,3 +17,4 @@ Module contents
    :members:
    :undoc-members:
    :show-inheritance:
+   :private-members:
