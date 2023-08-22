@@ -54,9 +54,6 @@ module via:
 .. |Downloads| image:: https://img.shields.io/pypi/dm/liberator.svg
    :target: https://pypistats.org/packages/liberator
 
-.. |ReadTheDocs| image:: https://readthedocs.org/projects/liberator/badge/?version=latest
-    :target: http://liberator.readthedocs.io/en/latest/
-
 .. # See: https://ci.appveyor.com/project/jon.crall/liberator/settings/badges
 .. .. |Appveyor| image:: https://ci.appveyor.com/api/projects/status/py3s2d6tyfjc8lm3/branch/main?svg=true
 .. :target: https://ci.appveyor.com/project/jon.crall/liberator/branch/main
