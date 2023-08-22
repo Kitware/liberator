@@ -20,7 +20,7 @@ then recursively parsing and extracting all missing dependencies.
 
 Here is an example. Say that you want to use the ``find_exe`` function from
 ``ubelt``, but you don't want to depend on ubelt itself, you can extract the
-minimal code necessary to define the ``fine_exe`` function in a new standalone
+minimal code necessary to define the ``find_exe`` function in a new standalone
 module via:
 
 
