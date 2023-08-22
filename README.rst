@@ -46,6 +46,19 @@ module via:
     print(lib.current_sourcecode())
 
 
+Limitations
+~~~~~~~~~~~
+
+Liberator has several limitations. It only works if the code is expressed
+statically (i.e. no decorators that register methods in a list to be injected
+into something later).  It does not do any work to evaluate anything, it just
+looks at function definitions and pulls them in verbatim.  It also does no work
+to mangle to deconflict different functions with the same names (although it
+could and that is an extension I'd lke add).  Lastly, it can only "expand"
+packages imported at the top level of the code. Nested imports are not
+"liberated". This is another extension that could be implemented, but it
+currently isn't.
+
 
 
 .. |Pypi| image:: https://img.shields.io/pypi/v/liberator.svg
