@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """
 Extracts relevant parts of the source code
 
@@ -22,20 +21,19 @@ ISSUES:
         imported like `import mod.submod` and all usage is of the form
         `mod.submod.attr`, then
 """
-from __future__ import absolute_import, division, print_function, unicode_literals
+import ast
+import astunparse
+import copy
+import inspect
+import io
+import sys
+import ubelt as ub
+import warnings
 from os.path import isdir
 from os.path import join
 from os.path import basename
-from collections import OrderedDict
-import warnings
-import ast
-import astunparse
-import inspect
-import ubelt as ub
-import copy
-import io
 from os.path import abspath
-from os.path import sys
+from collections import OrderedDict
 
 __all__ = ['Liberator', 'Closer']
 
@@ -569,7 +567,6 @@ class Liberator(ub.NiceRepr):
                         d._expanded = True
                     else:
                         lib.info('TODO: NEED TO CLOSE attribute varname = {}'.format(d))
-                        import warnings
                         # warnings.warn('Closing attribute {} may not be implemented'.format(d))
                         # definition is a non-module, directly copy in its code
                         # We can directly replace this import statement by
@@ -686,6 +683,7 @@ class UnparserVariant(astunparse.Unparser):
 
         Example:
             >>> from liberator.core import *  # NOQA
+            >>> from liberator.core import UnparserVariant
             >>> tq = '"' * 3
             >>> code = ub.codeblock(
             >>>     fr'''
@@ -697,19 +695,32 @@ class UnparserVariant(astunparse.Unparser):
             >>> import ast
             >>> tree = ast.parse(code)
             >>> node = tree.body[0].body[0].value
+            >>> v = io.StringIO()
+            >>> self = UnparserVariant(node, file=v)
+            >>> print(v.getvalue())
         """
         # Better support for multiline strings
         if not isinstance(node.value, str):
             return super()._Constant(node)
         if node.lineno != node.end_lineno:
             # heuristic for tripple quote strings
-
+            nl = '\n'
+            tsq = "'''"
+            tdq = '"""'
+            # indent = ' ' * node.col_offset
             candidates = [
-                '"""\n' + ub.indent(node.s + '\n"""', ' ' * node.col_offset),
-                'r"""\n' + ub.indent(node.s + '\n"""', ' ' * node.col_offset),
-                "'''\n" + ub.indent(node.s + "\n'''", ' ' * node.col_offset),
-                "r'''\n" + ub.indent(node.s + "\n'''", ' ' * node.col_offset),
+                # '"""\n' + ub.indent(node.s + '\n"""', ' ' * node.col_offset),
+                # 'r"""\n' + ub.indent(node.s + '\n"""', ' ' * node.col_offset),
+                # "'''\n" + ub.indent(node.s + "\n'''", ' ' * node.col_offset),
+                # "r'''\n" + ub.indent(node.s + "\n'''", ' ' * node.col_offset),
+                tdq + node.s + tdq,
+                'r' + tdq + node.s + tdq,
+                tsq + node.s + nl + tsq,
+                'r' + tsq + node.s + tsq,
             ]
+            if 1:
+                for cand in candidates:
+                    print(cand)
             found = None
             for cand in candidates:
                 try:
@@ -1255,7 +1266,6 @@ class DefinitionVisitor(ast.NodeVisitor, ub.NiceRepr):
         if source is None:
             raise ValueError('unable to derive source code')
 
-        source = ub.ensure_unicode(source)
         pt = ast.parse(source)
         visitor = DefinitionVisitor(modpath, modname, module, pt=pt,
                                     logger=logger)
