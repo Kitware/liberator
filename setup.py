@@ -223,7 +223,7 @@ if __name__ == "__main__":
     setupkw["version"] = VERSION
     setupkw["author"] = "joncrall"
     setupkw["author_email"] = "jon.crall@kitware.com"
-    setupkw["url"] = None
+    setupkw["url"] = "https://gitlab.kitware.com/python/liberator"
     setupkw["description"] = "static code extractor for Python"
     setupkw["long_description"] = parse_description()
     setupkw["long_description_content_type"] = "text/x-rst"
