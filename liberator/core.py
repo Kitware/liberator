@@ -31,14 +31,36 @@ import warnings
 import ast
 import astunparse
 import inspect
-import six
 import ubelt as ub
 import copy
-from six.moves import cStringIO
+import io
 from os.path import abspath
 from os.path import sys
 
 __all__ = ['Liberator', 'Closer']
+
+
+__todo__ = """
+
+# FIXME:
+# The following case has misformatted docstrings and needs to handle
+# the duplicate function name issue.
+
+import ubelt as ub
+import liberator
+lib = liberator.Liberator()
+
+import ubelt
+import xdoctest
+lib.add_dynamic(ubelt.util_import.modpath_to_modname)
+lib.add_dynamic(ubelt.util_import.modname_to_modpath)
+lib.add_dynamic(xdoctest.static_analysis.package_modpaths)
+lib.expand(['ubelt', 'xdoctest'])
+text = lib.current_sourcecode()
+print(text)
+
+
+"""
 
 
 class LocalLogger:
@@ -130,6 +152,7 @@ class Liberator(ub.NiceRepr):
         >>> from liberator.core import Liberator
         >>> lib = Liberator(logger=print)
         >>> lib.add_dynamic(ub.find_exe, eager=False)
+        >>> lib.expand(['ubelt'])
         >>> print(lib.current_sourcecode())
 
         >>> lib = Liberator()
@@ -654,45 +677,85 @@ class UnparserVariant(astunparse.Unparser):
         # be compatible with python2 if possible
         self.write("Ellipsis")
 
-    def _Constant(self, tree):
+    def _Constant(self, node):
+        """
+        Args:
+            node (ast.Constant):
+                a constant node, if it is a triplequote string we will try to
+                make it look nice.
+
+        Example:
+            >>> from liberator.core import *  # NOQA
+            >>> tq = '"' * 3
+            >>> code = ub.codeblock(
+            >>>     fr'''
+            >>>     def foobar():
+            >>>         {tq}
+            >>>         A docstring
+            >>>         {tq}
+            >>>     ''')
+            >>> import ast
+            >>> tree = ast.parse(code)
+            >>> node = tree.body[0].body[0].value
+        """
         # Better support for multiline strings
-        if six.PY3:
-            if not isinstance(tree.value, str):
-                return super()._Constant(tree)
-            if tree.lineno != tree.end_lineno:
-                # heuristic for tripple quote strings
+        if not isinstance(node.value, str):
+            return super()._Constant(node)
+        if node.lineno != node.end_lineno:
+            # heuristic for tripple quote strings
 
-                candidates = [
-                    '"""\n' + ub.indent(tree.s + '\n"""', ' ' * tree.col_offset),
-                    'r"""\n' + ub.indent(tree.s + '\n"""', ' ' * tree.col_offset),
-                    "'''\n" + ub.indent(tree.s + "\n'''", ' ' * tree.col_offset),
-                    "r'''\n" + ub.indent(tree.s + "\n'''", ' ' * tree.col_offset),
-                ]
-                found = None
-                for cand in candidates:
-                    try:
-                        ast.literal_eval(cand)
-                        # if  != tree.s.strip():
-                        #    raise Exception
-                    except Exception:
-                        pass
-                    else:
-                        found = cand
-                        break
-
-                if found:
-                    self.write(cand)
+            candidates = [
+                '"""\n' + ub.indent(node.s + '\n"""', ' ' * node.col_offset),
+                'r"""\n' + ub.indent(node.s + '\n"""', ' ' * node.col_offset),
+                "'''\n" + ub.indent(node.s + "\n'''", ' ' * node.col_offset),
+                "r'''\n" + ub.indent(node.s + "\n'''", ' ' * node.col_offset),
+            ]
+            found = None
+            for cand in candidates:
+                try:
+                    ast.literal_eval(cand)
+                    # if  != node.s.strip():
+                    #    raise Exception
+                except Exception:
+                    pass
                 else:
-                    self.write(repr(tree.s))
+                    found = cand
+                    break
+
+            if found:
+                self.write(cand)
             else:
-                self.write(repr(tree.s))
+                self.write(repr(node.s))
         else:
-            super()._Constant(tree)
+            self.write(repr(node.s))
 
 
 def unparse(tree):
-    """ wraps astunparse to fix 2/3 compatibility minor issues """
-    v = cStringIO()
+    r"""
+    wraps astunparse to fix 2/3 compatibility minor issues
+
+    Args:
+        tree (ast.AST): abstract syntax tree to unparse
+
+    FIXME:
+        [ ] This needs to format docstrings better
+
+    Example:
+        >>> from liberator.core import *  # NOQA
+        >>> tq = '"' * 3
+        >>> code = ub.codeblock(
+        >>>     fr'''
+        >>>     def foobar():
+        >>>         {tq}
+        >>>         A docstring
+        >>>         {tq}
+        >>>     ''')
+        >>> import ast
+        >>> tree = ast.parse(code)
+        >>> print(unparse(tree))
+    """
+    v = io.StringIO()
+    # astunparse.Unparser(tree, file=v)
     UnparserVariant(tree, file=v)
     return v.getvalue()
 
@@ -811,12 +874,8 @@ def _parse_static_node_value(node):
         values = map(_parse_static_node_value, node.values)
         value = OrderedDict(zip(keys, values))
         # value = dict(zip(keys, values))
-    elif six.PY3 and isinstance(node, (ast.NameConstant)):
+    elif isinstance(node, (ast.NameConstant)):
         value = node.value
-    elif (six.PY2 and isinstance(node, ast.Name) and
-          node.id in ['None', 'True', 'False']):
-        # disregard pathological python2 corner cases
-        value = {'None': None, 'True': True, 'False': False}[node.id]
     else:
         msg = ('Cannot parse a static value from non-static node '
                'of type: {!r}'.format(type(node)))
@@ -1197,16 +1256,7 @@ class DefinitionVisitor(ast.NodeVisitor, ub.NiceRepr):
             raise ValueError('unable to derive source code')
 
         source = ub.ensure_unicode(source)
-        if six.PY2:
-            try:
-                pt = ast.parse(source)
-            except SyntaxError as ex:
-                if 'encoding declaration in Unicode string' in ex.args[0]:
-                    pt = ast.parse(source.encode())
-                else:
-                    raise
-        else:
-            pt = ast.parse(source)
+        pt = ast.parse(source)
         visitor = DefinitionVisitor(modpath, modname, module, pt=pt,
                                     logger=logger)
         visitor.visit(pt)
@@ -1243,7 +1293,6 @@ class DefinitionVisitor(ast.NodeVisitor, ub.NiceRepr):
         visitor.generic_visit(node)
 
     def _common_visit_assign(visitor, node, target):
-        print(f'node={node}')
         key = getattr(target, 'id', None)
         if key is not None:
             try:
