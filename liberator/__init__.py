@@ -1,4 +1,15 @@
 """
++---------------+---------------------------------------------+
+| Github        | https://gitlab.kitware.com/python/liberator |
++---------------+---------------------------------------------+
+| Pypi          | https://pypi.org/project/liberator          |
++---------------+---------------------------------------------+
+| ReadTheDocs   | https://liberator.readthedocs.io/en/latest/ |
++---------------+---------------------------------------------+
+"""
+
+
+__mkinit__ = """
 mkinit -m liberator
 mkinit -m liberator --diff
 mkinit -m liberator --diff --help
