@@ -1,5 +1,6 @@
 [build-system]
 requires = [ "setuptools>=41.0.1",]
+build-backend = "setuptools.build_meta"
 
 [tool.mypy]
 ignore_missing_imports = true
@@ -8,18 +9,23 @@ ignore_missing_imports = true
 tags = [ "kitware", "gitlab", "purepy",]
 mod_name = "liberator"
 repo_name = "liberator"
+pkg_name = "liberator"
 rel_mod_parent_dpath = "."
-os = [ "linux", "osx", "all", "win",]
+os = [ "linux", "osx", "win",]
 min_python = 3.7
+version = "{mod_dpath}/__init__.py::__version__"
+url = "https://gitlab.kitware.com/python/liberator"
 author = "joncrall"
 author_email = "jon.crall@kitware.com"
 description = "static code extractor for Python"
 license = "Apache 2"
 dev_status = "planning"
+remote_host = "https://gitlab.kitware.com"
+remote_group = "python"
 
 [tool.pytest.ini_options]
-addopts = "-p no:doctest --xdoctest --xdoctest-style=google --ignore-glob=setup.py"
-norecursedirs = ".git ignore build __pycache__ dev _skbuild"
+addopts = "-p no:doctest --xdoctest --xdoctest-style=google --ignore-glob=setup.py --ignore-glob=dev --ignore-glob=docs"
+norecursedirs = ".git ignore build __pycache__ dev _skbuild docs"
 filterwarnings = [ "default", "ignore:.*No cfgstr given in Cacher constructor or call.*:Warning", "ignore:.*Define the __nice__ method for.*:Warning", "ignore:.*private pytest class or function.*:Warning",]
 
 [tool.coverage.run]

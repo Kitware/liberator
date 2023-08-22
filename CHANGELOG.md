@@ -1,11 +1,17 @@
 Liberator - static code extractor for Python 
 --------------------------------------------
 
+## Version 0.1.0 - Unreleased
 
-## Version 0.0.3 - Unreleased
+
+## Version 0.0.3 - Released 2023-08-22
 
 ### Fixed
 * assignments with type annotations
+* docstr formatting
+
+### Changed
+* Removed python2 cruft
 
 
 ## Version 0.0.2 - Released 2022-12-10

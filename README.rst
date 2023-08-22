@@ -20,7 +20,7 @@ then recursively parsing and extracting all missing dependencies.
 
 Here is an example. Say that you want to use the ``find_exe`` function from
 ``ubelt``, but you don't want to depend on ubelt itself, you can extract the
-minimal code necessary to define the ``fine_exe`` function in a new standalone
+minimal code necessary to define the ``find_exe`` function in a new standalone
 module via:
 
 
@@ -46,6 +46,19 @@ module via:
     print(lib.current_sourcecode())
 
 
+Limitations
+~~~~~~~~~~~
+
+Liberator has several limitations. It only works if the code is expressed
+statically (i.e. no decorators that register methods in a list to be injected
+into something later).  It does not do any work to evaluate anything, it just
+looks at function definitions and pulls them in verbatim.  It also does no work
+to mangle to deconflict different functions with the same names (although it
+could and that is an extension I'd lke add).  Lastly, it can only "expand"
+packages imported at the top level of the code. Nested imports are not
+"liberated". This is another extension that could be implemented, but it
+currently isn't.
+
 
 
 .. |Pypi| image:: https://img.shields.io/pypi/v/liberator.svg
@@ -53,9 +66,6 @@ module via:
 
 .. |Downloads| image:: https://img.shields.io/pypi/dm/liberator.svg
    :target: https://pypistats.org/packages/liberator
-
-.. |ReadTheDocs| image:: https://readthedocs.org/projects/liberator/badge/?version=latest
-    :target: http://liberator.readthedocs.io/en/latest/
 
 .. # See: https://ci.appveyor.com/project/jon.crall/liberator/settings/badges
 .. .. |Appveyor| image:: https://ci.appveyor.com/api/projects/status/py3s2d6tyfjc8lm3/branch/main?svg=true
