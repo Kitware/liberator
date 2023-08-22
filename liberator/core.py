@@ -253,6 +253,7 @@ class Liberator(ub.NiceRepr):
         current_sourcecode = '\n'.join(header_lines)
         current_sourcecode += '\n\n\n'
         current_sourcecode += '\n\n\n'.join(body_lines)
+        # current_sourcecode += '\n'.join(body_lines)
         return current_sourcecode
 
     def _ensure_visitor(lib, modpath=None, module=None):
@@ -713,28 +714,31 @@ class UnparserVariant(astunparse.Unparser):
                 # 'r"""\n' + ub.indent(node.s + '\n"""', ' ' * node.col_offset),
                 # "'''\n" + ub.indent(node.s + "\n'''", ' ' * node.col_offset),
                 # "r'''\n" + ub.indent(node.s + "\n'''", ' ' * node.col_offset),
+                # 'r' + tdq + node.s + tdq,
+                # 'r' + tsq + node.s + tsq,
+
                 tdq + node.s + tdq,
                 'r' + tdq + node.s + tdq,
                 tsq + node.s + nl + tsq,
                 'r' + tsq + node.s + tsq,
             ]
-            if 1:
+            if 0:
                 for cand in candidates:
                     print(cand)
             found = None
             for cand in candidates:
                 try:
-                    ast.literal_eval(cand)
-                    # if  != node.s.strip():
-                    #    raise Exception
-                except Exception:
+                    reparsed = ast.literal_eval(cand)
+                    if node.s != reparsed:
+                        raise ValueError('not equivalent')
+                except ValueError:
                     pass
                 else:
                     found = cand
                     break
 
             if found:
-                self.write(cand)
+                self.write(found)
             else:
                 self.write(repr(node.s))
         else:
@@ -1046,7 +1050,7 @@ class Definition(ub.NiceRepr):
                 # (NOTE: it should be possible to keep formatting with a bit of
                 # work)
                 self._code = unparse(self.node).strip('\n')
-        return self._code
+        return self._code.strip()
 
     def __nice__(self):
         parts = []
