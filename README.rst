@@ -1,7 +1,7 @@
 Liberator - static code extractor for Python
 --------------------------------------------
 
-|GitlabCIPipeline| |GitlabCICoverage| |Pypi| |Downloads|
+|GitlabCIPipeline| |GitlabCICoverage| |ReadTheDocs| |Pypi| |Downloads|
 
 +---------------+---------------------------------------------+
 | Github        | https://gitlab.kitware.com/python/liberator |
@@ -66,3 +66,6 @@ module via:
 
 .. |GitlabCICoverage| image:: https://gitlab.kitware.com/python/liberator/badges/main/coverage.svg?job=coverage
     :target: https://gitlab.kitware.com/python/liberator/commits/main
+
+.. |ReadTheDocs| image:: https://readthedocs.org/projects/liberator/badge/?version=latest
+    :target: http://liberator.readthedocs.io/en/latest/
