@@ -1,15 +1,22 @@
-.. liberator documentation master file, created by
-   sphinx-quickstart on Tue Mar 24 15:05:25 2020.
-   You can adapt this file completely to your liking, but it should at least
-   contain the root `toctree` directive.
+:gitlab_url: https://gitlab.kitware.com/computer-vision/liberator
+
+.. The large version wont work because github strips rst image rescaling. https://i.imgur.com/AcWVroL.png
+    # TODO: Add a logo
+    .. image:: https://i.imgur.com/PoYIsWE.png
+       :height: 100px
+       :align: left
 
 Welcome to liberator's documentation!
 =====================================
 
-.. toctree::
-   :maxdepth: 2
-   :caption: Contents:
+.. The __init__ files contains the top-level documentation overview
+.. automodule:: liberator.__init__
+   :show-inheritance:
 
+.. toctree::
+   :maxdepth: 5
+
+   liberator
 
 
 Indices and tables
@@ -17,4 +24,3 @@ Indices and tables
 
 * :ref:`genindex`
 * :ref:`modindex`
-* :ref:`search`

@@ -1,44 +1,69 @@
-# -*- coding: utf-8 -*-
 """
 Extracts relevant parts of the source code
 
-NOTE:
-    IF THE SOURCE CODE CHANGES WHILE THE RUN IS EXECUTING THEN THIS MAY NOT
-    WORK CORRECTLY.
+Note:
+    If the source code changes while the run is executing then this may not
+    work correctly.
 
-# TODO:
-# - [x] Maintain a parse tree instead of raw lines
-# - [x] Keep a mapping from "definition names" to the top-level nodes
-# in the parse tree that define them.
-# - [X] For each extracted node in the parse tree keep track of
-#     - [X] where it came from
-#     - [ ] what modifications were made to it
-# - [ ] Handle expanding imports nested within functions
-# - [ ] Maintain docstring formatting after using the node transformer
+TODO:
+
+- [x] Maintain a parse tree instead of raw lines
+
+- [x] Keep a mapping from "definition names" to the top-level nodes in the parse tree that define them.
+
+- [X] For each extracted node in the parse tree keep track of
+
+    - [X] where it came from
+
+    - [ ] what modifications were made to it
+
+- [ ] Handle expanding imports nested within functions
+
+- [ ] Maintain docstring formatting after using the node transformer
 
 
-ISSUES:
-    - [ ] We currently (0.0.1) get a KeyError in the case where, a module is
-        imported like `import mod.submod` and all usage is of the form
-        `mod.submod.attr`, then
+Issues:
+
+    - [ ] We currently (0.0.1) get a KeyError in the case where, a module is imported like `import mod.submod` and all usage is of the form `mod.submod.attr`, then
 """
-from __future__ import absolute_import, division, print_function, unicode_literals
+import ast
+import astunparse
+import copy
+import inspect
+import io
+import sys
+import ubelt as ub
+import warnings
 from os.path import isdir
 from os.path import join
 from os.path import basename
-from collections import OrderedDict
-import warnings
-import ast
-import astunparse
-import inspect
-import six
-import ubelt as ub
-import copy
-from six.moves import cStringIO
 from os.path import abspath
-from os.path import sys
+from collections import OrderedDict
 
 __all__ = ['Liberator', 'Closer']
+
+
+__todo__ = """
+
+# FIXME:
+# The following case has misformatted docstrings and needs to handle
+# the duplicate function name issue.
+
+import ubelt as ub
+import liberator
+lib = liberator.Liberator()
+
+import ubelt
+import xdoctest
+lib.add_dynamic(ubelt.util_import.modpath_to_modname)
+lib.add_dynamic(ubelt.util_import.modname_to_modpath)
+lib.add_dynamic(xdoctest.static_analysis.package_modpaths)
+lib.expand(['ubelt', 'xdoctest'])
+text = lib.current_sourcecode()
+print(text)
+
+
+"""
 
 
 class LocalLogger:
@@ -99,13 +124,16 @@ class LocalLogger:
 
 
 class Liberator(ub.NiceRepr):
-    """
+    r"""
     Maintains the current state of the source code
 
     There are 3 major steps:
+
     (a) extract the code to that defines a function or class from a module,
+
     (b) go back to the module and extract extra code required to define any
         names that were undefined in the extracted code, and
+
     (c) replace import statements to specified "expand" modules with the actual code
         used to define the variables accessed via the imports.
 
@@ -130,6 +158,7 @@ class Liberator(ub.NiceRepr):
         >>> from liberator.core import Liberator
         >>> lib = Liberator(logger=print)
         >>> lib.add_dynamic(ub.find_exe, eager=False)
+        >>> lib.expand(['ubelt'])
         >>> print(lib.current_sourcecode())
 
         >>> lib = Liberator()
@@ -139,21 +168,22 @@ class Liberator(ub.NiceRepr):
         >>> lib = Liberator(logger=3, tag='mytest')
         >>> lib.add_dynamic(ub.Cacher, eager=True)
         >>> visitor = ub.peek(lib.visitors.values())
-        >>> print('visitor.definitions = {}'.format(ub.repr2(ub.map_keys(str, visitor.definitions), nl=1)))
-        >>> print('visitor.nested_definitions = {}'.format(ub.repr2(ub.map_keys(str, visitor.nested_definitions), nl=1)))
+        >>> print('visitor.definitions = {}'.format(ub.urepr(ub.map_keys(str, visitor.definitions), nl=1)))
+        >>> print('visitor.nested_definitions = {}'.format(ub.urepr(ub.map_keys(str, visitor.nested_definitions), nl=1)))
 
         >>> lib._print_logs()
         >>> lib.expand(['ubelt'])
 
+    Ignore:
         from ubelt import _win32_links
         lib = Liberator()
         lib.add_dynamic(_win32_links._win32_symlink, eager=True)
         print(lib.current_sourcecode())
         definitions = list(visitor.definitions.values())
         import_defs = [d for d in definitions if 'Import' in d.type]
-        print('import_defs = {}'.format(ub.repr2(import_defs, nl=1)))
+        print('import_defs = {}'.format(ub.urepr(import_defs, nl=1)))
 
-    Ignore:
+    Example:
         >>> # xdoctest: +REQUIRES(module:fastai)
         >>> from liberator.core import *
         >>> import fastai.vision
@@ -162,10 +192,10 @@ class Liberator(ub.NiceRepr):
         >>> lib = Liberator()
         >>> lib.add_dynamic(obj)
         >>> lib.expand(expand_names)
-        >>> #print(ub.repr2(lib.body_defs, si=1))
+        >>> #print(ub.urepr(lib.body_defs, si=1))
         >>> print(lib.current_sourcecode())
 
-    Ignore:
+    Example:
         >>> # xdoctest: +REQUIRES(module:fastai)
         >>> from liberator.core import Liberator
         >>> from fastai.vision.models import unet
@@ -174,7 +204,7 @@ class Liberator(ub.NiceRepr):
         >>> lib.expand(['fastai'])
         >>> print(lib.current_sourcecode())
 
-    Ignore:
+    Example:
         >>> # xdoctest: +REQUIRES(module:netharn)
         >>> from liberator.core import *
         >>> import netharn as nh
@@ -184,7 +214,7 @@ class Liberator(ub.NiceRepr):
         >>> lib = Liberator()
         >>> lib.add_static(obj.__name__, sys.modules[obj.__module__].__file__)
         >>> lib.expand(expand_names)
-        >>> #print(ub.repr2(lib.body_defs, si=1))
+        >>> #print(ub.urepr(lib.body_defs, si=1))
         >>> print(lib.current_sourcecode())
     """
     def __init__(lib, tag='root', logger=None, verbose=0):
@@ -232,6 +262,7 @@ class Liberator(ub.NiceRepr):
         current_sourcecode = '\n'.join(header_lines)
         current_sourcecode += '\n\n\n'
         current_sourcecode += '\n\n\n'.join(body_lines)
+        # current_sourcecode += '\n'.join(body_lines)
         return current_sourcecode
 
     def _ensure_visitor(lib, modpath=None, module=None):
@@ -339,7 +370,7 @@ class Liberator(ub.NiceRepr):
             lib.debug(' * undefined_names = {}'.format(names))
             if names == prev_names:
                 for visitor in visitors:
-                    lib.debug('visitor.definitions = {}'.format(ub.repr2(
+                    lib.debug('visitor.definitions = {}'.format(ub.urepr(
                         ub.map_keys(str, visitor.definitions), si=1, nl=1)))
                 if 0:
                     warnings.warn('We were unable do do anything about undefined names')
@@ -406,7 +437,7 @@ class Liberator(ub.NiceRepr):
             names = sorted(undefined_names(current_sourcecode))
             lib.debug(' * undefined_names = {}'.format(names))
             if names == prev_names:
-                lib.debug('visitor.definitions = {}'.format(ub.repr2(
+                lib.debug('visitor.definitions = {}'.format(ub.urepr(
                     ub.map_keys(str, visitor.definitions), si=1, nl=1)))
                 if 0:
                     warnings.warn('We were unable do do anything about undefined names')
@@ -465,14 +496,9 @@ class Liberator(ub.NiceRepr):
 
     def expand(lib, expand_names):
         """
-        Experimental feature. Remove all references to specific modules by
-        directly copying in the referenced source code. If the code is
-        referenced from a module, then the references will need to change as
-        well.
-
-        TODO:
-            - [ ] Add special unique (mangled) suffixes to all expanded names
-                to avoid name conflicts.
+        Remove all references to specific modules by directly copying in the
+        referenced source code. If the code is referenced from a module, then
+        the references will need to change as well.
 
         Args:
             expand_name (List[str]): list of module names. For each module
@@ -483,7 +509,11 @@ class Liberator(ub.NiceRepr):
                 import from C-extension modules and expanding modules with
                 complicated global-level logic.
 
-        Ignore:
+        TODO:
+            - [ ] Add special unique (mangled) suffixes to all expanded names
+                to avoid name conflicts.
+
+        Example:
             >>> # Test a heavier duty class
             >>> # xdoctest: +REQUIRES(module:netharn)
             >>> from liberator.core import *
@@ -496,8 +526,8 @@ class Liberator(ub.NiceRepr):
             >>> lib = Liberator()
             >>> lib.add_dynamic(obj)
             >>> lib.expand(expand_names)
-            >>> #print('header_defs = ' + ub.repr2(lib.header_defs, si=1))
-            >>> #print('body_defs = ' + ub.repr2(lib.body_defs, si=1))
+            >>> #print('header_defs = ' + ub.urepr(lib.header_defs, si=1))
+            >>> #print('body_defs = ' + ub.urepr(lib.body_defs, si=1))
             >>> print('SOURCE:')
             >>> text = lib.current_sourcecode()
             >>> print(text)
@@ -529,7 +559,9 @@ class Liberator(ub.NiceRepr):
                 needs_expansion = expandable_definitions.get(root, [])
 
                 lib.debug('root = {!r}'.format(root))
-                lib.debug('needs_expansion = {!r}'.format(needs_expansion))
+                lib.debug('needs_expansion = {}'.format(ub.urepr(needs_expansion, nl=1)))
+
+                d: Definition
                 for d in needs_expansion:
                     if d._expanded:
                         continue
@@ -544,7 +576,6 @@ class Liberator(ub.NiceRepr):
                         d._expanded = True
                     else:
                         lib.info('TODO: NEED TO CLOSE attribute varname = {}'.format(d))
-                        import warnings
                         # warnings.warn('Closing attribute {} may not be implemented'.format(d))
                         # definition is a non-module, directly copy in its code
                         # We can directly replace this import statement by
@@ -562,6 +593,7 @@ class Liberator(ub.NiceRepr):
                             sub_lib = Liberator(lib.logger.tag + '.sub.' + d.name,
                                                 logger=lib.logger)
                             sub_lib.add_static(d.name, native_modpath)
+                            print(f'native_modpath={native_modpath}')
                             # sub_visitor = sub_lib.visitors[d.native_modname]
                             sub_lib.expand(expand_names)
 
@@ -651,45 +683,102 @@ class UnparserVariant(astunparse.Unparser):
         # be compatible with python2 if possible
         self.write("Ellipsis")
 
-    def _Constant(self, tree):
+    def _Constant(self, node):
+        """
+        Args:
+            node (ast.Constant):
+                a constant node, if it is a triplequote string we will try to
+                make it look nice.
+
+        Example:
+            >>> from liberator.core import *  # NOQA
+            >>> from liberator.core import UnparserVariant
+            >>> tq = '"' * 3
+            >>> code = ub.codeblock(
+            >>>     fr'''
+            >>>     def foobar():
+            >>>         {tq}
+            >>>         A docstring
+            >>>         {tq}
+            >>>     ''')
+            >>> import ast
+            >>> tree = ast.parse(code)
+            >>> node = tree.body[0].body[0].value
+            >>> v = io.StringIO()
+            >>> self = UnparserVariant(node, file=v)
+            >>> print(v.getvalue())
+        """
         # Better support for multiline strings
-        if six.PY3:
-            if not isinstance(tree.value, str):
-                return super()._Constant(tree)
-            if tree.lineno != tree.end_lineno:
-                # heuristic for tripple quote strings
+        if not isinstance(node.value, str):
+            return super()._Constant(node)
+        if node.lineno != node.end_lineno:
+            # heuristic for tripple quote strings
+            nl = '\n'
+            tsq = "'''"
+            tdq = '"""'
+            # indent = ' ' * node.col_offset
+            candidates = [
+                # '"""\n' + ub.indent(node.s + '\n"""', ' ' * node.col_offset),
+                # 'r"""\n' + ub.indent(node.s + '\n"""', ' ' * node.col_offset),
+                # "'''\n" + ub.indent(node.s + "\n'''", ' ' * node.col_offset),
+                # "r'''\n" + ub.indent(node.s + "\n'''", ' ' * node.col_offset),
+                # 'r' + tdq + node.s + tdq,
+                # 'r' + tsq + node.s + tsq,
 
-                candidates = [
-                    '"""\n' + ub.indent(tree.s + '\n"""', ' ' * tree.col_offset),
-                    'r"""\n' + ub.indent(tree.s + '\n"""', ' ' * tree.col_offset),
-                    "'''\n" + ub.indent(tree.s + "\n'''", ' ' * tree.col_offset),
-                    "r'''\n" + ub.indent(tree.s + "\n'''", ' ' * tree.col_offset),
-                ]
-                found = None
+                tdq + node.s + tdq,
+                'r' + tdq + node.s + tdq,
+                tsq + node.s + nl + tsq,
+                'r' + tsq + node.s + tsq,
+            ]
+            if 0:
                 for cand in candidates:
-                    try:
-                        ast.literal_eval(cand)
-                        # if  != tree.s.strip():
-                        #    raise Exception
-                    except Exception:
-                        pass
-                    else:
-                        found = cand
-                        break
-
-                if found:
-                    self.write(cand)
+                    print(cand)
+            found = None
+            for cand in candidates:
+                try:
+                    reparsed = ast.literal_eval(cand)
+                    if node.s != reparsed:
+                        raise ValueError('not equivalent')
+                except ValueError:
+                    pass
                 else:
-                    self.write(repr(tree.s))
+                    found = cand
+                    break
+
+            if found:
+                self.write(found)
             else:
-                self.write(repr(tree.s))
+                self.write(repr(node.s))
         else:
-            super()._Constant(tree)
+            self.write(repr(node.s))
 
 
 def unparse(tree):
-    """ wraps astunparse to fix 2/3 compatibility minor issues """
-    v = cStringIO()
+    r"""
+    wraps astunparse to fix 2/3 compatibility minor issues
+
+    Args:
+        tree (ast.AST): abstract syntax tree to unparse
+
+    FIXME:
+        [ ] This needs to format docstrings better
+
+    Example:
+        >>> from liberator.core import *  # NOQA
+        >>> tq = '"' * 3
+        >>> code = ub.codeblock(
+        >>>     fr'''
+        >>>     def foobar():
+        >>>         {tq}
+        >>>         A docstring
+        >>>         {tq}
+        >>>     ''')
+        >>> import ast
+        >>> tree = ast.parse(code)
+        >>> print(unparse(tree))
+    """
+    v = io.StringIO()
+    # astunparse.Unparser(tree, file=v)
     UnparserVariant(tree, file=v)
     return v.getvalue()
 
@@ -808,12 +897,8 @@ def _parse_static_node_value(node):
         values = map(_parse_static_node_value, node.values)
         value = OrderedDict(zip(keys, values))
         # value = dict(zip(keys, values))
-    elif six.PY3 and isinstance(node, (ast.NameConstant)):
+    elif isinstance(node, (ast.NameConstant)):
         value = node.value
-    elif (six.PY2 and isinstance(node, ast.Name) and
-          node.id in ['None', 'True', 'False']):
-        # disregard pathological python2 corner cases
-        value = {'None': None, 'True': True, 'False': False}[node.id]
     else:
         msg = ('Cannot parse a static value from non-static node '
                'of type: {!r}'.format(type(node)))
@@ -835,7 +920,7 @@ def undefined_names(sourcecode):
 
     Example:
         >>> # xdoctest: +REQUIRES(module:pyflakes)
-        >>> print(ub.repr2(undefined_names('x = y'), nl=0))
+        >>> print(ub.urepr(undefined_names('x = y'), nl=0))
         {'y'}
     """
     import pyflakes.api
@@ -973,7 +1058,7 @@ class Definition(ub.NiceRepr):
                 # (NOTE: it should be possible to keep formatting with a bit of
                 # work)
                 self._code = unparse(self.node).strip('\n')
-        return self._code
+        return self._code.strip()
 
     def __nice__(self):
         parts = []
@@ -1019,7 +1104,7 @@ class AttributeAccessVisitor(ast.NodeVisitor):
             def blah():
                 return foo.bar.BAZ()
             ''')
-        >>> print(ub.repr2(undefined_names(sourcecode), nl=0))
+        >>> print(ub.urepr(undefined_names(sourcecode), nl=0))
 
         from liberator.core import DefinitionVisitor  # NOQA
         pt = ast.parse(sourcecode)
@@ -1077,7 +1162,7 @@ class DefinitionVisitor(ast.NodeVisitor, ub.NiceRepr):
         ...     r = 3
         ...     ''')
         >>> visitor = DefinitionVisitor.parse(source=sourcecode, modpath=modpath)
-        >>> print(ub.repr2(visitor.definitions, si=1))
+        >>> print(ub.urepr(visitor.definitions, si=1))
 
     Example:
         >>> from liberator.core import *
@@ -1093,7 +1178,7 @@ class DefinitionVisitor(ast.NodeVisitor, ub.NiceRepr):
                     return 'bar'
         ...     ''')
         >>> visitor = DefinitionVisitor.parse(source=sourcecode, modpath=modpath)
-        >>> print(ub.repr2(visitor.definitions, si=1))
+        >>> print(ub.urepr(visitor.definitions, si=1))
 
     Example:
         >>> from liberator.core import *
@@ -1112,10 +1197,10 @@ class DefinitionVisitor(ast.NodeVisitor, ub.NiceRepr):
                     return ub.Cacher
         ...     ''')
         >>> visitor = DefinitionVisitor.parse(source=sourcecode, modpath=modpath)
-        >>> print(ub.repr2(list(visitor.definitions), si=1))
-        >>> print(ub.repr2(list(visitor.nested_definitions), si=1))
+        >>> print(ub.urepr(list(visitor.definitions), si=1))
+        >>> print(ub.urepr(list(visitor.nested_definitions), si=1))
 
-    Ignore:
+    Example:
         >>> # xdoctest: +REQUIRES(module:mmdet)
         >>> import mmdet
         >>> import mmdet.models
@@ -1124,10 +1209,23 @@ class DefinitionVisitor(ast.NodeVisitor, ub.NiceRepr):
         >>> lib.add_dynamic(mmdet.models.backbones.HRNet)
         >>> print(lib.current_sourcecode())
         >>> visitor = ub.peek(lib.visitors.values())
-        >>> print(ub.repr2(visitor.definitions, si=1))
+        >>> print(ub.urepr(visitor.definitions, si=1))
         >>> d = visitor.definitions['HRNet']
         >>> print(d.code[0:1000])
 
+    Example:
+        >>> from liberator.core import *
+        >>> from liberator.core import DefinitionVisitor
+        >>> from liberator import core
+        >>> modpath = core.__file__
+        >>> # Test case global variables with type annots
+        >>> sourcecode = ub.codeblock(
+                '''
+                GLOBAL_VAR: list = []
+        ...     ''')
+        >>> visitor = DefinitionVisitor.parse(source=sourcecode, modpath=modpath)
+        >>> print(ub.urepr(list(visitor.definitions), si=1))
+        >>> print(ub.urepr(list(visitor.nested_definitions), si=1))
     """
 
     def __init__(visitor, modpath=None, modname=None, module=None, pt=None,
@@ -1180,17 +1278,7 @@ class DefinitionVisitor(ast.NodeVisitor, ub.NiceRepr):
         if source is None:
             raise ValueError('unable to derive source code')
 
-        source = ub.ensure_unicode(source)
-        if six.PY2:
-            try:
-                pt = ast.parse(source)
-            except SyntaxError as ex:
-                if 'encoding declaration in Unicode string' in ex.args[0]:
-                    pt = ast.parse(source.encode())
-                else:
-                    raise
-        else:
-            pt = ast.parse(source)
+        pt = ast.parse(source)
         visitor = DefinitionVisitor(modpath, modname, module, pt=pt,
                                     logger=logger)
         visitor.visit(pt)
@@ -1226,35 +1314,43 @@ class DefinitionVisitor(ast.NodeVisitor, ub.NiceRepr):
                 visitor.nested_definitions[d.name] = d
         visitor.generic_visit(node)
 
+    def _common_visit_assign(visitor, node, target):
+        key = getattr(target, 'id', None)
+        if key is not None:
+            try:
+                static_val = _parse_static_node_value(node.value)
+                code = '{} = {}'.format(key, ub.urepr(static_val))
+            except TypeError:
+                #code = unparse(node).strip('\n')
+                code = None
+
+            if visitor.logger:
+                if key in visitor.definitions:
+                    # OVERLOADED
+                    visitor.logger.debug('OVERLOADED key = {!r}'.format(key))
+
+            definition = Definition(
+                key, node, code=code, type='Assign',
+                modpath=visitor.modpath,
+                modname=visitor.modname,
+                absname=visitor.modname + '.' + key,
+                native_modname=visitor.modname,
+            )
+            if visitor.level == 0:
+                visitor.definitions[key] = definition
+            # else:
+            #     visitor.nested_definitions[key] = definition
+
+    def visit_AnnAssign(visitor, node):
+        if visitor.level > 0:
+            return
+        visitor._common_visit_assign(node, node.target)
+
     def visit_Assign(visitor, node):
         if visitor.level > 0:
             return
         for target in node.targets:
-            key = getattr(target, 'id', None)
-            if key is not None:
-                try:
-                    static_val = _parse_static_node_value(node.value)
-                    code = '{} = {}'.format(key, ub.repr2(static_val))
-                except TypeError:
-                    #code = unparse(node).strip('\n')
-                    code = None
-
-                if visitor.logger:
-                    if key in visitor.definitions:
-                        # OVERLOADED
-                        visitor.logger.debug('OVERLOADED key = {!r}'.format(key))
-
-                definition = Definition(
-                    key, node, code=code, type='Assign',
-                    modpath=visitor.modpath,
-                    modname=visitor.modname,
-                    absname=visitor.modname + '.' + key,
-                    native_modname=visitor.modname,
-                )
-                if visitor.level == 0:
-                    visitor.definitions[key] = definition
-                # else:
-                #     visitor.nested_definitions[key] = definition
+            visitor._common_visit_assign(node, target)
 
     def visit_FunctionDef(visitor, node):
         defenition = Definition(
@@ -1323,7 +1419,7 @@ class DefinitionVisitor(ast.NodeVisitor, ub.NiceRepr):
         Ignore:
             from liberator.core import *
             visitor = DefinitionVisitor.parse(module=module)
-            print('visitor.definitions = {}'.format(ub.repr2(visitor.definitions, sv=1)))
+            print('visitor.definitions = {}'.format(ub.urepr(visitor.definitions, sv=1)))
         """
         if node.level:
             # Handle relative imports
@@ -1404,7 +1500,7 @@ def _closefile(fpath, modnames):
     for key in calldefs.keys():
         lib.add_static(key, modpath)
     lib.expand(expand_names)
-    #print(ub.repr2(lib.body_defs, si=1))
+    #print(ub.urepr(lib.body_defs, si=1))
     print(lib.current_sourcecode())
 
 
