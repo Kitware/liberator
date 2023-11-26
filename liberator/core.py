@@ -66,6 +66,13 @@ print(text)
 """
 
 
+try:
+    import rich
+    rich_print = rich.print
+except ImportError:
+    rich_print = print
+
+
 class LocalLogger:
     """
     A non-global logger used for specific code paths or class instances.
@@ -82,28 +89,28 @@ class LocalLogger:
         line = '[WARN.{}] '.format(self.tag) + self.indent + msg
         self.logs.append(line)
         if self.verbose >= 0:
-            print(line)
+            rich_print(line)
 
     def error(self, msg):
         line = '[ERROR.{}] '.format(self.tag) + self.indent + msg
         self.logs.append(line)
         if self.verbose >= 0:
-            print(line)
+            rich_print(line)
 
     def info(self, msg):
         line = '[INFO.{}] '.format(self.tag) + self.indent + msg
         self.logs.append(line)
         if self.verbose >= 1:
-            print(line)
+            rich_print(line)
 
     def debug(self, msg):
         line = '[DEBUG.{}] '.format(self.tag) + self.indent + msg
         self.logs.append(line)
         if self.verbose >= 2:
-            print(line)
+            rich_print(line)
 
     def _print_logs(self):
-        print('\n'.join(self.logs))
+        rich_print('\n'.join(self.logs))
 
     @classmethod
     def coerce(cls, item, tag='', verbose=0):
@@ -216,6 +223,21 @@ class Liberator(ub.NiceRepr):
         >>> lib.expand(expand_names)
         >>> #print(ub.urepr(lib.body_defs, si=1))
         >>> print(lib.current_sourcecode())
+
+    Example:
+        >>> # Test a file with a nested dependency
+        >>> import ubelt as ub
+        >>> from liberator.core import Liberator
+        >>> lib = Liberator(logger=print, verbose=3)
+        >>> lib.add_dynamic(ub.download, eager=True)
+        >>> visitor = ub.peek(lib.visitors.values())
+        >>> print('visitor.definitions = {}'.format(ub.urepr(ub.map_keys(str, visitor.definitions), nl=1)))
+        >>> print('visitor.nested_definitions = {}'.format(ub.urepr(ub.map_keys(str, visitor.nested_definitions), nl=1)))
+        >>> print(lib.current_sourcecode())
+        >>> lib.expand(['ubelt'])
+        >>> print('visitor.definitions = {}'.format(ub.urepr(ub.map_keys(str, visitor.definitions), nl=1)))
+        >>> print('visitor.nested_definitions = {}'.format(ub.urepr(ub.map_keys(str, visitor.nested_definitions), nl=1)))
+        >>> print(lib.current_sourcecode())
     """
     def __init__(lib, tag='root', logger=None, verbose=0):
         lib.header_defs = ub.odict()
@@ -244,7 +266,7 @@ class Liberator(ub.NiceRepr):
         return self.logger.tag
 
     def _add_definition(lib, d):
-        lib.debug('_add_definition = {!r}'.format(d))
+        lib.debug('+ _add_definition = {!r}'.format(d))
         d = copy.deepcopy(d)
         # print('ADD DEFINITION d = {!r}'.format(d))
         if 'Import' in d.type:
@@ -255,6 +277,7 @@ class Liberator(ub.NiceRepr):
             if d.absname in lib.body_defs:
                 del lib.body_defs[d.absname]
             lib.body_defs[d.absname] = d
+        lib.debug('+ finish _add_definition')
 
     def current_sourcecode(self):
         header_lines = [d.code for d in self.header_defs.values()]
@@ -287,7 +310,7 @@ class Liberator(ub.NiceRepr):
         Args:
             obj (object): a reference to a class or function
 
-            eager (bool): experimental
+            eager (bool): experimental. Keep as True for now.
 
         Example:
             >>> from liberator import core
@@ -300,7 +323,7 @@ class Liberator(ub.NiceRepr):
         """
         lib.info('\n\n')
         lib.info('====\n\n')
-        lib.info('lib.add_dynamic(obj={!r})'.format(obj))
+        lib.info('START: lib.add_dynamic(obj={!r})'.format(obj))
         name = obj.__name__
         modname = obj.__module__
         module = sys.modules[modname]
@@ -316,6 +339,8 @@ class Liberator(ub.NiceRepr):
         else:
             # Experimental
             lib._lazy_visitors.append(visitor)
+
+        lib.info('FINISH: lib.add_dynamic(obj={!r})'.format(obj))
 
     def add_static(lib, name, modpath):
         """
@@ -531,17 +556,32 @@ class Liberator(ub.NiceRepr):
             >>> print('SOURCE:')
             >>> text = lib.current_sourcecode()
             >>> print(text)
+
+        Example:
+            >>> # Test a file with a nested dependency
+            >>> import ubelt as ub
+            >>> from liberator.core import Liberator
+            >>> lib = Liberator(logger=print, verbose=3)
+            >>> lib.add_dynamic(ub.download, eager=True)
+            >>> lib.expand(['ubelt'])
+            >>> print(lib.current_sourcecode())
         """
         lib.debug('\n\n')
-        lib.debug('====\n\n')
-        lib.debug("!!! EXPANDING")
+        lib.debug('=== START EXPAND ===')
+
+        if isinstance(expand_names, str):
+            expand_names = [expand_names]  # hack for easier api
+
+        lib.debug(f"expand_names: {expand_names} ")
+        expand_iteration = 0
         # Expand references to internal modules
-        flag = True
-        while flag:
+        still_needs_expansion = True
+        while still_needs_expansion:
+            expand_iteration += 1
 
             # Associate all top-level modules with any possible expand_name
-            # that might trigger them to be expanded. Note this does not
-            # account for nested imports.
+            # that might trigger them to be expanded.
+            # NOTE: this does not account for nested imports.
             expandable_definitions = ub.ddict(list)
             for d in lib.header_defs.values():
                 parts = d.native_modname.split('.')
@@ -549,10 +589,11 @@ class Liberator(ub.NiceRepr):
                     root = '.'.join(parts[:i])
                     expandable_definitions[root].append(d)
 
-            lib.debug('expandable_definitions = {!r}'.format(
+            lib.debug(f'Expand Iteration: {expand_iteration:03d}')
+            lib.debug('Found: expandable_definitions = {!r}'.format(
                 list(expandable_definitions.keys())))
 
-            flag = False
+            still_needs_expansion = False
             # current_sourcecode = lib.current_sourcecode()
             # closed_visitor = DefinitionVisitor.parse(source=current_sourcecode)
             for root in expand_names:
@@ -565,7 +606,7 @@ class Liberator(ub.NiceRepr):
                 for d in needs_expansion:
                     if d._expanded:
                         continue
-                    flag = True
+                    still_needs_expansion = True
                     # if d.absname == d.native_modname:
                     if ub.modname_to_modpath(d.absname):
                         lib.info('TODO: NEED TO CLOSE module = {}'.format(d))
@@ -623,6 +664,8 @@ class Liberator(ub.NiceRepr):
                             # print('sub_visitor = {!r}'.format(sub_visitor))
                             # lib.close(sub_visitor)
                             lib.debug('CLOSED attribute d = {}'.format(d))
+
+        lib.debug("=== FINISH EXPAND ===\n\n")
 
     def expand_module_attributes(lib, d):
         """
@@ -1492,7 +1535,7 @@ def _closefile(fpath, modnames):
     from xdoctest import static_analysis as static
     modpath = fpath
     expand_names = modnames
-    source = open(fpath, 'r').read()
+    source = ub.Path(fpath).read_text()
     calldefs = static.parse_calldefs(source, fpath)
     calldefs.pop('__doc__', None)
 
