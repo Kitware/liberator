@@ -7,6 +7,9 @@ Liberator - static code extractor for Python
 
 * Drop 3.6 and 3.7 support
 
+### Added
+
+* Experimental ability to expand internal imports
 
 
 ## Version 0.0.3 - Released 2023-08-22
