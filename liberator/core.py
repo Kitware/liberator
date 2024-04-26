@@ -262,7 +262,8 @@ class Liberator(ub.NiceRepr):
         >>> print(lib.current_sourcecode())
     """
     def __init__(lib, tag='root', logger=None, verbose=0,
-                 expand_internal_imports=False):
+                 expand_internal_imports=False, minify=False):
+        lib.minify = minify
         lib.header_defs = ub.odict()
         lib.body_defs = ub.odict()
         lib.visitors = {}
@@ -292,6 +293,9 @@ class Liberator(ub.NiceRepr):
     def _add_definition(lib, d):
         lib.debug('+ _add_definition = {!r}'.format(d))
         d = copy.deepcopy(d)
+        # Hack to set the minify flag on a definition
+        d.minify = lib.minify
+
         # print('ADD DEFINITION d = {!r}'.format(d))
         if 'Import' in d.type:
             if d.absname in lib.header_defs:
@@ -1340,7 +1344,9 @@ class Definition(ub.NiceRepr):
         node = self.node.body[0]
     """
     def __init__(self, name, node, type=None, code=None, absname=None,
-                 modpath=None, modname=None, native_modname=None):
+                 modpath=None, modname=None, native_modname=None,
+                 minify=False):
+
         self.name = name
         self.node = node
         self.type = type
@@ -1349,6 +1355,7 @@ class Definition(ub.NiceRepr):
         self.modpath = modpath
         self.modname = modname
         self.native_modname = native_modname
+        self.minify = minify
         self._expanded = False
         self._internal_expanded = False
 
@@ -1377,6 +1384,12 @@ class Definition(ub.NiceRepr):
             # (NOTE: it should be possible to keep formatting with a bit of
             # work)
             _code = unparse(self.node).strip('\n')
+
+        if self.minify:
+            """
+            TODO: good minifier
+            """
+            _code = remove_comments_and_docstrings2(_code)
         return _code
 
     @property
@@ -1844,3 +1857,144 @@ class Closer(Liberator):
     for backwards compatibility.
     """
     pass
+
+
+def remove_comments_and_docstrings(source):
+    r"""
+    Args:
+        source (str): uft8 text of source code
+
+    Returns:
+        str: out: the source with comments and docstrings removed.
+
+    References:
+        https://stackoverflow.com/questions/1769332/remove-comments-docstrings
+
+    Example:
+        >>> source = ub.codeblock(
+            '''
+            def foo():
+                'The spaces before this docstring are tokenize.INDENT'
+                test = [
+                    'The spaces before this string do not get a token'
+                ]
+            ''')
+        >>> out = remove_comments_and_docstrings(source)
+        >>> want = ub.codeblock(
+            '''
+            def foo():
+                pass
+                test = [
+                    'The spaces before this string do not get a token'
+                ]''').splitlines()
+        >>> got = [o.rstrip() for o in out.splitlines()]
+        >>> assert got == want
+
+
+        >>> source = ub.codeblock(
+            '''
+            def foo():
+                " docstring "
+            ''')
+        >>> out = remove_comments_and_docstrings(source)
+        >>> print(out)
+        >>> source = ub.codeblock(
+            '''
+            class foo():
+                r{qqq}
+                docstring
+                {qqq}
+            ''').format(qqq='"' * 3)
+        >>> out = remove_comments_and_docstrings(source)
+        >>> print(out)
+
+    """
+    import tokenize
+    source = ub.ensure_unicode(source)
+    io_obj = io.StringIO(source)
+    output_parts = []
+    prev_toktype = tokenize.INDENT
+    last_lineno = -1
+    last_col = 0
+    for tok in tokenize.generate_tokens(io_obj.readline):
+        token_type = tok[0]
+        token_string = tok[1]
+        start_line, start_col = tok[2]
+        end_line, end_col = tok[3]
+        # ltext = tok[4]
+        # The following two conditionals preserve indentation.
+        # This is necessary because we're not using tokenize.untokenize()
+        # (because it spits out code with copious amounts of oddly-placed
+        # whitespace).
+        if start_line > last_lineno:
+            last_col = 0
+        if start_col > last_col:
+            output_parts.append((' ' * (start_col - last_col)))
+        # Remove comments:
+        if token_type == tokenize.COMMENT:
+            pass
+        # This series of conditionals removes docstrings:
+        elif token_type == tokenize.STRING:
+            if prev_toktype != tokenize.INDENT:
+                # This is likely a docstring; double-check we're not inside an
+                # operator:
+                if prev_toktype != tokenize.NEWLINE:
+                    # Note regarding NEWLINE vs NL: The tokenize module
+                    # differentiates between newlines that start a new statement
+                    # and newlines inside of operators such as parens, brackes,
+                    # and curly braces.  Newlines inside of operators are
+                    # NEWLINE and newlines that start new code are NL.
+                    # Catch whole-module docstrings:
+                    if start_col > 0:
+                        # Unlabelled indentation means we're inside an operator
+                        output_parts.append(token_string)
+                    # Note regarding the INDENT token: The tokenize module does
+                    # not label indentation inside of an operator (parens,
+                    # brackets, and curly braces) as actual indentation.
+            else:
+                # NOTE: simply removing docstrings may create invalid code
+                # in cases where the only body is a docstring (e.g. a
+                # custom exception). Insert a pass to prevent this.  It
+                # would be nice to detect when this is necessary.
+                output_parts.append('pass')
+        else:
+            output_parts.append(token_string)
+        prev_toktype = token_type
+        last_col = end_col
+        last_lineno = end_line
+    out = ''.join(output_parts)
+    return out
+
+
+def remove_comments_and_docstrings2(source):
+    # https://stackoverflow.com/a/62074206/887074
+    import io, tokenize, re  # NOQA
+    io_obj = io.StringIO(source)
+    out = ""
+    prev_toktype = tokenize.INDENT
+    last_lineno = -1
+    last_col = 0
+    for tok in tokenize.generate_tokens(io_obj.readline):
+        token_type = tok[0]
+        token_string = tok[1]
+        start_line, start_col = tok[2]
+        end_line, end_col = tok[3]
+        ltext = tok[4]  # NOQA
+        if start_line > last_lineno:
+            last_col = 0
+        if start_col > last_col:
+            out += (" " * (start_col - last_col))
+        if token_type == tokenize.COMMENT:
+            pass
+        elif token_type == tokenize.STRING:
+            if prev_toktype != tokenize.INDENT:
+                if prev_toktype != tokenize.NEWLINE:
+                    if start_col > 0:
+                        out += token_string
+        else:
+            out += token_string
+        prev_toktype = token_type
+        last_col = end_col
+        last_lineno = end_line
+    out = '\n'.join(line for line in out.splitlines() if line.strip())
+    return out
