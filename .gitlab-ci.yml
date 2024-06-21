@@ -2,6 +2,7 @@
 
 stages:
 # TEMPLATES
+- lint
 - build
 - test
 - gpgsign
@@ -30,6 +31,7 @@ stages:
   stage: build
   before_script:
   - 'python -V  # Print out python version for debugging'
+  - df -h
   script:
   - python -m pip install setuptools>=0.8 wheel build twine
   - python -m build --wheel --outdir dist
@@ -66,6 +68,9 @@ stages:
     print(str(sorted(pathlib.Path('dist').glob('liberator*.whl'))[-1]).replace(chr(92),
     chr(47)))")
   - export MOD_VERSION=$(python -c "from pkginfo import Wheel; print(Wheel('$WHEEL_FPATH').version)")
+  - echo "$WHEEL_FPATH=WHEEL_FPATH"
+  - echo "$INSTALL_EXTRAS=INSTALL_EXTRAS"
+  - echo "$MOD_VERSION=MOD_VERSION"
   - pip install --prefer-binary "liberator[$INSTALL_EXTRAS]==$MOD_VERSION" -f dist
   - echo "Install finished."
   - echo "Creating test sandbox directory"
@@ -78,6 +83,7 @@ stages:
   - ls -altr
   - '# Get the path to the installed package and run the tests'
   - export MOD_DPATH=$(python -c "import liberator, os; print(os.path.dirname(liberator.__file__))")
+  - export MOD_NAME=liberator
   - |-
     echo "
     ---
@@ -87,7 +93,7 @@ stages:
     ---
     "
   - |-
-    python -m pytest --verbose -p pytester -p no:doctest --xdoctest --cov-config ../pyproject.toml --cov-report term --cov="liberator" "$MOD_DPATH" ../tests
+    python -m pytest --verbose -p pytester -p no:doctest --xdoctest --cov-config ../pyproject.toml --cov-report term --durations=100 --cov="$MOD_NAME" "$MOD_DPATH" ../tests
   - echo "pytest command finished, moving the coverage file to the repo root"
 .test_full-loose_template: &test_full-loose_template
   <<: *common_test_template
@@ -114,6 +120,9 @@ stages:
     print(str(sorted(pathlib.Path('dist').glob('liberator*.whl'))[-1]).replace(chr(92),
     chr(47)))")
   - export MOD_VERSION=$(python -c "from pkginfo import Wheel; print(Wheel('$WHEEL_FPATH').version)")
+  - echo "$WHEEL_FPATH=WHEEL_FPATH"
+  - echo "$INSTALL_EXTRAS=INSTALL_EXTRAS"
+  - echo "$MOD_VERSION=MOD_VERSION"
   - pip install --prefer-binary "liberator[$INSTALL_EXTRAS]==$MOD_VERSION" -f dist
   - echo "Install finished."
   - echo "Creating test sandbox directory"
@@ -126,6 +135,7 @@ stages:
   - ls -altr
   - '# Get the path to the installed package and run the tests'
   - export MOD_DPATH=$(python -c "import liberator, os; print(os.path.dirname(liberator.__file__))")
+  - export MOD_NAME=liberator
   - |-
     echo "
     ---
@@ -135,7 +145,7 @@ stages:
     ---
     "
   - |-
-    python -m pytest --verbose -p pytester -p no:doctest --xdoctest --cov-config ../pyproject.toml --cov-report term --cov="liberator" "$MOD_DPATH" ../tests
+    python -m pytest --verbose -p pytester -p no:doctest --xdoctest --cov-config ../pyproject.toml --cov-report term --durations=100 --cov="$MOD_NAME" "$MOD_DPATH" ../tests
   - echo "pytest command finished, moving the coverage file to the repo root"
 .test_minimal-strict_template: &test_minimal-strict_template
   <<: *common_test_template
@@ -162,6 +172,9 @@ stages:
     print(str(sorted(pathlib.Path('dist').glob('liberator*.whl'))[-1]).replace(chr(92),
     chr(47)))")
   - export MOD_VERSION=$(python -c "from pkginfo import Wheel; print(Wheel('$WHEEL_FPATH').version)")
+  - echo "$WHEEL_FPATH=WHEEL_FPATH"
+  - echo "$INSTALL_EXTRAS=INSTALL_EXTRAS"
+  - echo "$MOD_VERSION=MOD_VERSION"
   - pip install --prefer-binary "liberator[$INSTALL_EXTRAS]==$MOD_VERSION" -f dist
   - echo "Install finished."
   - echo "Creating test sandbox directory"
@@ -174,6 +187,7 @@ stages:
   - ls -altr
   - '# Get the path to the installed package and run the tests'
   - export MOD_DPATH=$(python -c "import liberator, os; print(os.path.dirname(liberator.__file__))")
+  - export MOD_NAME=liberator
   - |-
     echo "
     ---
@@ -183,7 +197,7 @@ stages:
     ---
     "
   - |-
-    python -m pytest --verbose -p pytester -p no:doctest --xdoctest --cov-config ../pyproject.toml --cov-report term --cov="liberator" "$MOD_DPATH" ../tests
+    python -m pytest --verbose -p pytester -p no:doctest --xdoctest --cov-config ../pyproject.toml --cov-report term --durations=100 --cov="$MOD_NAME" "$MOD_DPATH" ../tests
   - echo "pytest command finished, moving the coverage file to the repo root"
 .test_full-strict_template: &test_full-strict_template
   <<: *common_test_template
@@ -210,6 +224,9 @@ stages:
     print(str(sorted(pathlib.Path('dist').glob('liberator*.whl'))[-1]).replace(chr(92),
     chr(47)))")
   - export MOD_VERSION=$(python -c "from pkginfo import Wheel; print(Wheel('$WHEEL_FPATH').version)")
+  - echo "$WHEEL_FPATH=WHEEL_FPATH"
+  - echo "$INSTALL_EXTRAS=INSTALL_EXTRAS"
+  - echo "$MOD_VERSION=MOD_VERSION"
   - pip install --prefer-binary "liberator[$INSTALL_EXTRAS]==$MOD_VERSION" -f dist
   - echo "Install finished."
   - echo "Creating test sandbox directory"
@@ -222,6 +239,7 @@ stages:
   - ls -altr
   - '# Get the path to the installed package and run the tests'
   - export MOD_DPATH=$(python -c "import liberator, os; print(os.path.dirname(liberator.__file__))")
+  - export MOD_NAME=liberator
   - |-
     echo "
     ---
@@ -231,31 +249,8 @@ stages:
     ---
     "
   - |-
-    python -m pytest --verbose -p pytester -p no:doctest --xdoctest --cov-config ../pyproject.toml --cov-report term --cov="liberator" "$MOD_DPATH" ../tests
+    python -m pytest --verbose -p pytester -p no:doctest --xdoctest --cov-config ../pyproject.toml --cov-report term --durations=100 --cov="$MOD_NAME" "$MOD_DPATH" ../tests
   - echo "pytest command finished, moving the coverage file to the repo root"
-build/cp37-linux-x86_64:
-  <<: *build_template
-  image: python:3.7
-test/minimal-loose/cp37-linux-x86_64:
-  <<: *test_minimal-loose_template
-  image: python:3.7
-  needs:
-  - build/cp37-linux-x86_64
-test/full-loose/cp37-linux-x86_64:
-  <<: *test_full-loose_template
-  image: python:3.7
-  needs:
-  - build/cp37-linux-x86_64
-test/minimal-strict/cp37-linux-x86_64:
-  <<: *test_minimal-strict_template
-  image: python:3.7
-  needs:
-  - build/cp37-linux-x86_64
-test/full-strict/cp37-linux-x86_64:
-  <<: *test_full-strict_template
-  image: python:3.7
-  needs:
-  - build/cp37-linux-x86_64
 build/cp38-linux-x86_64:
   <<: *build_template
   image: python:3.8
@@ -348,14 +343,48 @@ test/full-strict/cp311-linux-x86_64:
   image: python:3.11
   needs:
   - build/cp311-linux-x86_64
+build/cp312-linux-x86_64:
+  <<: *build_template
+  image: python:3.12
+test/minimal-loose/cp312-linux-x86_64:
+  <<: *test_minimal-loose_template
+  image: python:3.12
+  needs:
+  - build/cp312-linux-x86_64
+test/full-loose/cp312-linux-x86_64:
+  <<: *test_full-loose_template
+  image: python:3.12
+  needs:
+  - build/cp312-linux-x86_64
+test/minimal-strict/cp312-linux-x86_64:
+  <<: *test_minimal-strict_template
+  image: python:3.12
+  needs:
+  - build/cp312-linux-x86_64
+test/full-strict/cp312-linux-x86_64:
+  <<: *test_full-strict_template
+  image: python:3.12
+  needs:
+  - build/cp312-linux-x86_64
+lint:
+  <<: *common_template
+  image: python:3.11
+  stage: lint
+  before_script:
+  - df -h
+  script:
+  - pip install -r requirements/linting.txt
+  - ./run_linter.sh
+  allow_failure: true
 gpgsign/wheels:
   <<: *common_template
-  image: python:3.8
+  image: python:3.11
   stage: gpgsign
   artifacts:
     paths:
     - dist/*.asc
-
+    - dist/*.whl
+    - dist/*.ots
   only:
     refs:
         # Gitlab will only expose protected variables on protected branches
@@ -365,8 +394,6 @@ gpgsign/wheels:
     - main
     - release
   needs:
-  - job: build/cp37-linux-x86_64
-    artifacts: true
   - job: build/cp38-linux-x86_64
     artifacts: true
   - job: build/cp39-linux-x86_64
@@ -374,6 +401,8 @@ gpgsign/wheels:
   - job: build/cp310-linux-x86_64
     artifacts: true
   - job: build/cp311-linux-x86_64
+    artifacts: true
+  - job: build/cp312-linux-x86_64
     artifacts: true
   script:
   - ls dist
@@ -409,9 +438,11 @@ gpgsign/wheels:
         $GPG_EXECUTABLE --verify $WHEEL_PATH.asc $WHEEL_PATH
     done
   - ls dist
+  - python -m pip install opentimestamps-client
+  - ots stamp dist/*.whl dist/*.asc
 deploy/wheels:
   <<: *common_template
-  image: python:3.8
+  image: python:3.11
   stage: deploy
   only:
     refs:
@@ -456,6 +487,26 @@ deploy/wheels:
         git tag $TAG_NAME -m "tarball tag $VERSION"
         git push --tags "https://git-push-token:${PUSH_TOKEN}@${URL_HOST}"
     fi
+  - |-
+    # https://docs.gitlab.com/ee/ci/variables/predefined_variables.html
+    echo "CI_PROJECT_URL=$CI_PROJECT_URL"
+    echo "CI_PROJECT_ID=$CI_PROJECT_ID"
+    echo "CI_PROJECT_NAME=$CI_PROJECT_NAME"
+    echo "CI_PROJECT_NAMESPACE=$CI_PROJECT_NAMESPACE"
+    echo "CI_API_V4_URL=$CI_API_V4_URL"
+
+    export PROJECT_VERSION=$(python -c "import setup; print(setup.VERSION)")
+    echo "PROJECT_VERSION=$PROJECT_VERSION"
+
+    # --header "PRIVATE-TOKEN: $PRIVATE_GITLAB_TOKEN" \
+    for FPATH in "dist"/*; do
+        FNAME=$(basename $FPATH)
+        echo $FNAME
+        curl \
+            --header "JOB-TOKEN: $CI_JOB_TOKEN" \
+            --upload-file $FPATH \
+            "$CI_API_V4_URL/projects/$CI_PROJECT_ID/packages/generic/$CI_PROJECT_NAME/$PROJECT_VERSION/$FNAME"
+    done
 
 
 # end
