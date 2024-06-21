@@ -588,6 +588,10 @@ class Liberator(ub.NiceRepr):
 
         Example:
             >>> # Test a file with a nested dependency
+            >>> import sys
+            >>> if sys.version_info[0:2] <= (3, 8):
+            ...     import pytest
+            ...     pytest.skip('Internal import removal does not work on 3.8')
             >>> import ubelt as ub
             >>> from liberator.core import Liberator
             >>> lib = Liberator(logger=print, verbose=3, expand_internal_imports=True)
@@ -625,7 +629,6 @@ class Liberator(ub.NiceRepr):
                                     lib.header_defs[_d.absname] = _d
                         if not found:
                             lib.warn('Unable to expand internal node')
-
 
         lib.debug(f"expand_names: {expand_names} ")
         expand_iteration = 0
@@ -1180,6 +1183,10 @@ class RemoveInternalImports(ast.NodeTransformer):
         >>> from liberator.core import unparse
         >>> import ast
         >>> import copy
+        >>> import sys
+        >>> if sys.version_info[0:2] <= (3, 8):
+        ...     import pytest
+        ...     pytest.skip('Internal import removal does not work on 3.8')
         >>> source = ub.codeblock(
         ...     '''
         ...     import ubelt as ub
@@ -1336,9 +1343,12 @@ class Definition(ub.NiceRepr):
         >>> rewriter = RewriteModuleAccess('ub')
         >>> rewriter.update_definition(self)
         >>> print(self.code)
-        >>> rewriter2 = RemoveInternalImports('ubelt')
-        >>> rewriter2.update_definition(self)
-        >>> print(self.code)
+        >>> # Internal import removal does not work on 3.8
+        >>> import sys
+        >>> if sys.version_info[0:2] >= (3, 9):
+        ...     rewriter2 = RemoveInternalImports('ubelt')
+        ...     rewriter2.update_definition(self)
+        ...     print(self.code)
 
     Ignore:
         node = self.node.body[0]
