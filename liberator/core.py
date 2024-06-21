@@ -1,5 +1,27 @@
 """
-Extracts relevant parts of the source code
+Extracts relevant parts of the source code.
+
+
+The basic outline of how it works is this:
+
+    * Given a reference to one or more function / classes
+
+    * For each of these functions / classes:
+
+        * look at the standalone source code via inspect
+
+        * determine which names are undefined
+
+        * Add definitions from the module that defined them.
+
+    * Given a set of modules that should not be referenced
+
+        * Go through each definition and remove those references
+
+        * Look at name errors, and determine what code needs to be added
+
+        * Recursively add / expand code until there are no more name errors.
+
 
 Note:
     If the source code changes while the run is executing then this may not
@@ -66,6 +88,13 @@ print(text)
 """
 
 
+try:
+    import rich
+    rich_print = rich.print
+except ImportError:
+    rich_print = print
+
+
 class LocalLogger:
     """
     A non-global logger used for specific code paths or class instances.
@@ -82,28 +111,28 @@ class LocalLogger:
         line = '[WARN.{}] '.format(self.tag) + self.indent + msg
         self.logs.append(line)
         if self.verbose >= 0:
-            print(line)
+            rich_print(line)
 
     def error(self, msg):
         line = '[ERROR.{}] '.format(self.tag) + self.indent + msg
         self.logs.append(line)
         if self.verbose >= 0:
-            print(line)
+            rich_print(line)
 
     def info(self, msg):
         line = '[INFO.{}] '.format(self.tag) + self.indent + msg
         self.logs.append(line)
         if self.verbose >= 1:
-            print(line)
+            rich_print(line)
 
     def debug(self, msg):
         line = '[DEBUG.{}] '.format(self.tag) + self.indent + msg
         self.logs.append(line)
         if self.verbose >= 2:
-            print(line)
+            rich_print(line)
 
     def _print_logs(self):
-        print('\n'.join(self.logs))
+        rich_print('\n'.join(self.logs))
 
     @classmethod
     def coerce(cls, item, tag='', verbose=0):
@@ -216,12 +245,30 @@ class Liberator(ub.NiceRepr):
         >>> lib.expand(expand_names)
         >>> #print(ub.urepr(lib.body_defs, si=1))
         >>> print(lib.current_sourcecode())
+
+    Example:
+        >>> # Test a file with a nested dependency
+        >>> import ubelt as ub
+        >>> from liberator.core import Liberator
+        >>> lib = Liberator(logger=print, verbose=3)
+        >>> lib.add_dynamic(ub.download, eager=True)
+        >>> visitor = ub.peek(lib.visitors.values())
+        >>> print('visitor.definitions = {}'.format(ub.urepr(ub.map_keys(str, visitor.definitions), nl=1)))
+        >>> print('visitor.nested_definitions = {}'.format(ub.urepr(ub.map_keys(str, visitor.nested_definitions), nl=1)))
+        >>> print(lib.current_sourcecode())
+        >>> lib.expand(['ubelt'])
+        >>> print('visitor.definitions = {}'.format(ub.urepr(ub.map_keys(str, visitor.definitions), nl=1)))
+        >>> print('visitor.nested_definitions = {}'.format(ub.urepr(ub.map_keys(str, visitor.nested_definitions), nl=1)))
+        >>> print(lib.current_sourcecode())
     """
-    def __init__(lib, tag='root', logger=None, verbose=0):
+    def __init__(lib, tag='root', logger=None, verbose=0,
+                 expand_internal_imports=False, minify=False):
+        lib.minify = minify
         lib.header_defs = ub.odict()
         lib.body_defs = ub.odict()
         lib.visitors = {}
         lib.logger = LocalLogger.coerce(logger, tag=tag, verbose=verbose)
+        lib.expand_internal_imports = expand_internal_imports
 
         lib._lazy_visitors = []
 
@@ -244,8 +291,11 @@ class Liberator(ub.NiceRepr):
         return self.logger.tag
 
     def _add_definition(lib, d):
-        lib.debug('_add_definition = {!r}'.format(d))
+        lib.debug('+ _add_definition = {!r}'.format(d))
         d = copy.deepcopy(d)
+        # Hack to set the minify flag on a definition
+        d.minify = lib.minify
+
         # print('ADD DEFINITION d = {!r}'.format(d))
         if 'Import' in d.type:
             if d.absname in lib.header_defs:
@@ -255,6 +305,7 @@ class Liberator(ub.NiceRepr):
             if d.absname in lib.body_defs:
                 del lib.body_defs[d.absname]
             lib.body_defs[d.absname] = d
+        lib.debug('+ finish _add_definition')
 
     def current_sourcecode(self):
         header_lines = [d.code for d in self.header_defs.values()]
@@ -287,7 +338,7 @@ class Liberator(ub.NiceRepr):
         Args:
             obj (object): a reference to a class or function
 
-            eager (bool): experimental
+            eager (bool): experimental. Keep as True for now.
 
         Example:
             >>> from liberator import core
@@ -300,7 +351,7 @@ class Liberator(ub.NiceRepr):
         """
         lib.info('\n\n')
         lib.info('====\n\n')
-        lib.info('lib.add_dynamic(obj={!r})'.format(obj))
+        lib.info('START: lib.add_dynamic(obj={!r})'.format(obj))
         name = obj.__name__
         modname = obj.__module__
         module = sys.modules[modname]
@@ -316,6 +367,8 @@ class Liberator(ub.NiceRepr):
         else:
             # Experimental
             lib._lazy_visitors.append(visitor)
+
+        lib.info('FINISH: lib.add_dynamic(obj={!r})'.format(obj))
 
     def add_static(lib, name, modpath):
         """
@@ -425,7 +478,7 @@ class Liberator(ub.NiceRepr):
         """
         # Parse the parent module to find only the relevant global varaibles and
         # include those in the extracted source code.
-        lib.info('closing - i.e. populating, crawling')
+        lib.info('START close - i.e. populating, crawling')
 
         # Loop until all undefined names are defined
         names = True
@@ -454,7 +507,7 @@ class Liberator(ub.NiceRepr):
                 try:
                     try:
                         # pass
-                        lib.debug(' * try visitor.extract_definition({})'.format(name))
+                        lib.debug(' * try visitor.extract_definition({!r})'.format(name))
                         d = visitor.extract_definition(name)
                     except KeyError as ex:
                         lib.debug(' * encountered issue: {!r}'.format(ex))
@@ -493,6 +546,7 @@ class Liberator(ub.NiceRepr):
                     lib.error(' * failed to close name = {!r}'.format(name))
                     # lib.error('<<< CURRENT_SOURCE >>>\n{}\n<<<>>>'.format(ub.highlight_code(current_sourcecode)))
                     lib.error('--- </ERROR[2]> ---')
+        lib.info('FINISH close')
 
     def expand(lib, expand_names):
         """
@@ -531,17 +585,61 @@ class Liberator(ub.NiceRepr):
             >>> print('SOURCE:')
             >>> text = lib.current_sourcecode()
             >>> print(text)
+
+        Example:
+            >>> # Test a file with a nested dependency
+            >>> import sys
+            >>> if sys.version_info[0:2] <= (3, 8):
+            ...     import pytest
+            ...     pytest.skip('Internal import removal does not work on 3.8')
+            >>> import ubelt as ub
+            >>> from liberator.core import Liberator
+            >>> lib = Liberator(logger=print, verbose=3, expand_internal_imports=True)
+            >>> lib.add_dynamic(ub.download, eager=True)
+            >>> lib.expand(['ubelt'])
+            >>> print(lib.current_sourcecode())
         """
         lib.debug('\n\n')
-        lib.debug('====\n\n')
-        lib.debug("!!! EXPANDING")
+        lib.debug('=== START EXPAND ===')
+
+        if isinstance(expand_names, str):
+            expand_names = [expand_names]  # hack for easier api
+
+        if lib.expand_internal_imports:
+            lib.debug('Experimental: expanding internal imports')
+            # Experimental: force expansion of internal imports by removing
+            # them, and pretending they were global imports. This probably is
+            # not the 100% correct way to do it, but should be fine for a POC.
+            for name in expand_names:
+                internal_import_remover = RemoveInternalImports(name)
+                for d in lib.body_defs.values():
+                    internal_import_remover.update_definition(d)
+
+                if internal_import_remover.rewritten_nodes:
+                    lib.debug(f'internal_import_remover.rewritten_nodes={internal_import_remover.rewritten_nodes}')
+                    for node in  internal_import_remover.rewritten_nodes:
+                        removed_names = {a.name for a in node.names}
+                        removed_names |= {a.asname for a in node.names}
+                        # Hack: pretend the nested imports were header imports
+                        found = 0
+                        for visitor in lib.visitors.values():
+                            for _d in visitor.nested_definitions.values():
+                                if _d.name in removed_names:
+                                    found = 1
+                                    lib.header_defs[_d.absname] = _d
+                        if not found:
+                            lib.warn('Unable to expand internal node')
+
+        lib.debug(f"expand_names: {expand_names} ")
+        expand_iteration = 0
         # Expand references to internal modules
-        flag = True
-        while flag:
+        still_needs_expansion = True
+        while still_needs_expansion:
+            expand_iteration += 1
 
             # Associate all top-level modules with any possible expand_name
-            # that might trigger them to be expanded. Note this does not
-            # account for nested imports.
+            # that might trigger them to be expanded.
+            # NOTE: this does not account for nested imports.
             expandable_definitions = ub.ddict(list)
             for d in lib.header_defs.values():
                 parts = d.native_modname.split('.')
@@ -549,10 +647,11 @@ class Liberator(ub.NiceRepr):
                     root = '.'.join(parts[:i])
                     expandable_definitions[root].append(d)
 
-            lib.debug('expandable_definitions = {!r}'.format(
+            lib.debug(f'Expand Iteration: {expand_iteration:03d}')
+            lib.debug('Found: expandable_definitions = {!r}'.format(
                 list(expandable_definitions.keys())))
 
-            flag = False
+            still_needs_expansion = False
             # current_sourcecode = lib.current_sourcecode()
             # closed_visitor = DefinitionVisitor.parse(source=current_sourcecode)
             for root in expand_names:
@@ -565,7 +664,7 @@ class Liberator(ub.NiceRepr):
                 for d in needs_expansion:
                     if d._expanded:
                         continue
-                    flag = True
+                    still_needs_expansion = True
                     # if d.absname == d.native_modname:
                     if ub.modname_to_modpath(d.absname):
                         lib.info('TODO: NEED TO CLOSE module = {}'.format(d))
@@ -591,8 +690,28 @@ class Liberator(ub.NiceRepr):
                                                 'Are you missing an __init__.py?'.format(d.native_modname))
 
                             sub_lib = Liberator(lib.logger.tag + '.sub.' + d.name,
-                                                logger=lib.logger)
-                            sub_lib.add_static(d.name, native_modpath)
+                                                logger=lib.logger,
+                                                expand_internal_imports=lib.expand_internal_imports)
+
+                            try:
+                                sub_lib.add_static(d.name, native_modpath)
+                            except Exception:
+                                ALLOW_FALLBACK = 1
+                                if ALLOW_FALLBACK:
+                                    # IF we somehow cant add the name
+                                    # statically (e.g. the native-modpath
+                                    # exposes the requested name dynamically,
+                                    # so static extraction is impossible) we
+                                    # may be able to hack around it by running
+                                    # the code, and dynamically adding the
+                                    # name.
+                                    ns = {}
+                                    exec(d.code, ns, ns)
+                                    dynamic_obj = ns[d.name]
+                                    sub_lib.add_dynamic(dynamic_obj)
+                                else:
+                                    raise
+
                             print(f'native_modpath={native_modpath}')
                             # sub_visitor = sub_lib.visitors[d.native_modname]
                             sub_lib.expand(expand_names)
@@ -612,7 +731,7 @@ class Liberator(ub.NiceRepr):
                             # Hack: remove the imported definition and add the
                             # explicit definition
                             # TODO: FIXME: more robust modification and replacement
-                            d._code = '# ' + d.code
+                            d._code = '# LIBERATED: ' + d.code
                             d._expanded = True
 
                             for d_ in sub_lib.header_defs.values():
@@ -623,6 +742,8 @@ class Liberator(ub.NiceRepr):
                             # print('sub_visitor = {!r}'.format(sub_visitor))
                             # lib.close(sub_visitor)
                             lib.debug('CLOSED attribute d = {}'.format(d))
+
+        lib.debug("=== FINISH EXPAND ===\n\n")
 
     def expand_module_attributes(lib, d):
         """
@@ -643,8 +764,7 @@ class Liberator(ub.NiceRepr):
             # TODO: make more robust
             rewriter = RewriteModuleAccess(varname)
             for d_ in lib.body_defs.values():
-                rewriter.visit(d_.node)
-                d_._code = unparse(d_.node)
+                rewriter.update_definition(d_)
 
             lib.debug('rewriter.accessed_attrs = {!r}'.format(rewriter.accessed_attrs))
 
@@ -664,6 +784,27 @@ class Liberator(ub.NiceRepr):
 
         _exhaust(varname, modname, varmodpath)
         d._code = '# ' + d.code
+
+    def _experimental_write_to(self, fpath):
+        """
+        Write the current sourcode to a file, but preserve the header docstr
+        """
+        # import parso
+        fpath = ub.Path(fpath)
+        text = self.current_sourcecode()
+        # new_module = parso.parse(text)
+
+        if fpath.exists():
+            import parso
+            old_module = parso.parse(fpath.read_text())
+            docstr_node = old_module.children[0]
+            prefix = docstr_node.get_code()
+            # .get_code()
+        else:
+            prefix = ''
+
+        final = prefix + '\n' + text + '\n'
+        fpath.write_text(final)
 
 
 class UnparserVariant(astunparse.Unparser):
@@ -709,7 +850,7 @@ class UnparserVariant(astunparse.Unparser):
             >>> print(v.getvalue())
         """
         # Better support for multiline strings
-        if not isinstance(node.value, str):
+        if not isinstance(node.value, str) or getattr(node, '_no_unparse_hack', 0) == 1:
             return super()._Constant(node)
         if node.lineno != node.end_lineno:
             # heuristic for tripple quote strings
@@ -952,7 +1093,24 @@ def undefined_names(sourcecode):
     return names
 
 
-class RewriteModuleAccess(ast.NodeTransformer):
+class LevelAwareNodeTransformer(ast.NodeTransformer):
+    def __init__(self):
+        self.level = 0
+
+    def visit_FunctionDef(self, node):
+        self.level += 1
+        self.generic_visit(node)
+        self.level -= 1
+        return node
+
+    def visit_ClassDef(self, node):
+        self.level += 1
+        self.generic_visit(node)
+        self.level -= 1
+        return node
+
+
+class RewriteModuleAccess(LevelAwareNodeTransformer):
     """
     Refactors attribute accesses into top-level references.
     In other words, instances of <varname>.<attr> change to <attr>.
@@ -968,47 +1126,35 @@ class RewriteModuleAccess(ast.NodeTransformer):
         ...     biz.foo.baz.bar = 3
         ...     ''')
         >>> pt = ast.parse(source)
-        >>> visitor = RewriteModuleAccess('foo')
+        >>> self = RewriteModuleAccess('foo')
         >>> orig = unparse(pt)
         >>> print(orig)
         foo.bar = 3
         foo.baz.bar = 3
         biz.foo.baz.bar = 3
-        >>> visitor.visit(pt)
+        >>> self.visit(pt)
         >>> modified = unparse(pt)
         >>> print(modified)
         bar = 3
         baz.bar = 3
         biz.foo.baz.bar = 3
-        >>> visitor.accessed_attrs
+        >>> self.accessed_attrs
         ['bar', 'baz']
     """
     def __init__(self, modname):
+        super().__init__()
         self.modname = modname
-        self.level = 0
         self.accessed_attrs = []
 
-    def visit_Import(self, node):
-        # if self.level == 0:
-        #     return None
-        return node
-
-    def visit_ImportFrom(self, node):
-        # if self.level == 0:
-        #     return None
-        return node
-
-    def visit_FunctionDef(self, node):
-        self.level += 1
-        self.generic_visit(node)
-        self.level -= 1
-        return node
-
-    def visit_ClassDef(self, node):
-        self.level += 1
-        self.generic_visit(node)
-        self.level -= 1
-        return node
+    def update_definition(self, definition: 'Definition'):
+        """
+        Rewrites a definition to remote a namespace reference (i.e.  assume it
+        exists in the global scope) (NOTE: we should be doing some namespace
+        mangling instead)
+        """
+        self.visit(definition.node)
+        definition._code = unparse(definition.node)
+        definition._expanded = True
 
     def visit_Attribute(self, node):
         # print('VISIT ATTR: node = {!r}'.format(node.__dict__))
@@ -1022,9 +1168,195 @@ class RewriteModuleAccess(ast.NodeTransformer):
         return node
 
 
+class RemoveInternalImports(ast.NodeTransformer):
+    """
+    Modifies an AST node to remove an internal import.
+    For "well behaved code" this should leave any use of that import as an
+    undefined variable.
+
+    CommandLine:
+        xdoctest -m liberator.core RemoveInternalImports
+
+    Example:
+        >>> from liberator.core import *
+        >>> from liberator.core import RemoveInternalImports
+        >>> from liberator.core import unparse
+        >>> import ast
+        >>> import copy
+        >>> import sys
+        >>> if sys.version_info[0:2] <= (3, 8):
+        ...     import pytest
+        ...     pytest.skip('Internal import removal does not work on 3.8')
+        >>> source = ub.codeblock(
+        ...     '''
+        ...     import ubelt as ub
+        ...     'a real constant'
+        ...     x = 1
+        ...     from ubelt import bazbiz
+        ...     from ubelt.util_path import Path
+        ...     from ubelt.progiter import ProgIter as Progress
+        ...     from packaging.version import parse as Version
+        ...     if 1:
+        ...         'another real constant'
+        ...         import ubelt as ub
+        ...         from ubelt import bazbiz
+        ...     ub.foobar()
+        ...     ''')
+        >>> pt = ast.parse(source)
+        >>> pt1 = copy.deepcopy(pt)
+        >>> node = pt.body[0]
+        >>> self = RemoveInternalImports('ubelt')
+        >>> self.visit(pt)
+        >>> modified = unparse(pt)
+        >>> print(modified)
+
+    Ignore:
+        node = pt1.body[1]
+        node = pt.body[1]
+
+        for v in pt1.body:
+            print(f'{type(v)}, v.__dict__={v.__dict__}')
+        print('---')
+        for v in pt.body:
+            print(f'{type(v)}, v.__dict__={v.__dict__}')
+
+        pt1.body[0].lineno
+        pt.body[0].lineno
+    """
+    def __init__(self, name):
+        self.name = name
+        self.level = 0
+        self.rewritten_nodes = []
+
+    def update_definition(self, definition: 'Definition'):
+        """
+        Rewrites a definition to remote a namespace reference (i.e.  assume it
+        exists in the global scope) (NOTE: we should be doing some namespace
+        mangling instead)
+        """
+        self.visit(definition.node)
+        definition._code = unparse(definition.node)
+        # FIXME: having _internal_expanded & _expanded is confusing
+        definition._internal_expanded = True
+
+    def _check_match(self, modname, name):
+        parts = modname.split('.')
+        matchable_modnames = []
+        for i in range(1, len(parts) + 1):
+            modname_prefix = '.'.join(parts[:i])
+            matchable_modnames.append(modname_prefix)
+        return name in matchable_modnames
+
+    def _comment_node(self, node):
+        """
+        Given a node, produced a commented out version of it
+        """
+        line_value = unparse(node).replace('\n', '')
+        prefix = '# LIBERATED(internal): '
+        extra_offset = 2 + len(prefix)
+        new_node = ast.Constant(
+            prefix + line_value,
+            # line_value,
+            lineno=node.lineno,
+            col_offset=node.col_offset,
+            end_col_offset=node.end_col_offset + extra_offset,
+            end_lineno=node.end_lineno)
+        new_node._no_unparse_hack = 1
+        new_node = ast.Expr(new_node)
+        return new_node
+
+    def visit_Import(self, node):
+        # FIXME: multiple imports case
+        new_node = None
+        hacked_assigns = []
+        for alias in node.names:
+            modname = alias.name
+            if self._check_match(modname, self.name):
+                if alias.asname is not None:
+                    hacked_assigns.append((alias.asname, alias.name))
+                new_node = self._comment_node(node)
+                self.rewritten_nodes.append(node)
+        if new_node is None:
+            yield node
+        else:
+            yield new_node
+            # HACK: For aliases as-names, insert assignments
+            for var, val in hacked_assigns:
+                print(f'self.name={self.name}')
+                print(f'val={val}')
+                print(f'var={var}')
+                yield ast.Assign([ast.Name(var)], ast.Name(val))
+
+    def visit_ImportFrom(self, node):
+        # FIXME: multiple imports case
+        new_node = None
+        hacked_assigns = []
+        for alias in node.names:
+            modname = node.module
+            if self._check_match(modname, self.name):
+                if alias.asname is not None:
+                    hacked_assigns.append((alias.asname, alias.name))
+                new_node = self._comment_node(node)
+                self.rewritten_nodes.append(node)
+        if new_node is None:
+            new_node = node
+        if new_node is None:
+            yield node
+        else:
+            yield new_node
+            # HACK: For aliases as-names, insert assignments
+            for var, val in hacked_assigns:
+                print(f'self.name={self.name}')
+                print(f'val={val}')
+                print(f'var={var}')
+                yield ast.Assign([ast.Name(var)], ast.Name(val))
+
+
 class Definition(ub.NiceRepr):
+    """
+    Stores a reference to some code we would like to define.
+
+    The `node` attribute stores a potentially modified CST from which the code
+    is generated.
+
+    Used in :class:`DefinitionVisitor`.
+
+    Example:
+        >>> from liberator.core import *
+        >>> from liberator.core import DefinitionVisitor
+        >>> from liberator.core import RewriteModuleAccess
+        >>> from liberator import core
+        >>> sourcecode = ub.codeblock(
+                '''
+                import kwarray
+
+                def func_with_global_ref(func):
+                    kwarray.ensure_rng(1)
+
+                def func_with_local_ref():
+                    import ubelt as ub
+                    return ub.Cacher
+        ...     ''')
+        >>> visitor = DefinitionVisitor.parse(source=sourcecode)
+        >>> self = visitor.definitions['func_with_local_ref']
+        >>> print(self)
+        >>> rewriter = RewriteModuleAccess('ub')
+        >>> rewriter.update_definition(self)
+        >>> print(self.code)
+        >>> # Internal import removal does not work on 3.8
+        >>> import sys
+        >>> if sys.version_info[0:2] >= (3, 9):
+        ...     rewriter2 = RemoveInternalImports('ubelt')
+        ...     rewriter2.update_definition(self)
+        ...     print(self.code)
+
+    Ignore:
+        node = self.node.body[0]
+    """
     def __init__(self, name, node, type=None, code=None, absname=None,
-                 modpath=None, modname=None, native_modname=None):
+                 modpath=None, modname=None, native_modname=None,
+                 minify=False):
+
         self.name = name
         self.node = node
         self.type = type
@@ -1033,41 +1365,58 @@ class Definition(ub.NiceRepr):
         self.modpath = modpath
         self.modname = modname
         self.native_modname = native_modname
+        self.minify = minify
         self._expanded = False
+        self._internal_expanded = False
+
+    def _extract_code(self):
+        # NOTE: the unparse variant captures decorators whereas the dynamic
+        # inspect variant does not seem to do that.
+        #
+        # In general the inspect.getsource seems to return the same
+        # formatting as the original module, but the unparse
+        # is more accurate.
+        try:
+            if self._internal_expanded:
+                raise Exception
+            if self._expanded or self.type == 'Assign':
+                # always use astunparse if we have expanded
+                raise Exception
+            if self.modname is None:
+                raise Exception
+            # Attempt to dynamically extract the source code because it
+            # keeps formatting better.
+            module = ub.import_module_from_name(self.modname)
+            obj = getattr(module, self.name)
+            _code = inspect.getsource(obj).strip('\n')
+        except Exception:
+            # Fallback on static sourcecode extraction
+            # (NOTE: it should be possible to keep formatting with a bit of
+            # work)
+            _code = unparse(self.node).strip('\n')
+
+        if self.minify:
+            """
+            TODO: good minifier
+            """
+            _code = remove_comments_and_docstrings2(_code)
+        return _code
 
     @property
     def code(self):
         if self._code is None:
-            # NOTE: the unparse variant captures decorators whereas the dynamic
-            # inspect variant does not seem to do that.
-            #
-            # In general the inspect.getsource seems to return the same
-            # formatting as the original module, but the unparse
-            # is more accurate.
-            try:
-                if self._expanded or self.type == 'Assign':
-                    # always use astunparse if we have expanded
-                    raise Exception
-                # Attempt to dynamically extract the source code because it
-                # keeps formatting better.
-                module = ub.import_module_from_name(self.modname)
-                obj = getattr(module, self.name)
-                self._code = inspect.getsource(obj).strip('\n')
-            except Exception:
-                # Fallback on static sourcecode extraction
-                # (NOTE: it should be possible to keep formatting with a bit of
-                # work)
-                self._code = unparse(self.node).strip('\n')
+            self._code = self._extract_code()
+        assert self._code is not None
         return self._code.strip()
 
     def __nice__(self):
         parts = []
-        parts.append('name={}'.format(self.name))
-        parts.append('type={}'.format(self.type))
+        parts.append('name={!r}'.format(self.name))
+        parts.append('type={!r}'.format(self.type))
         if self.absname is not None:
-            parts.append('absname={}'.format(self.absname))
+            parts.append('absname={!r}'.format(self.absname))
         if self.native_modname is not None:
-            parts.append('native_modname={}'.format(self.native_modname))
+            parts.append('native_modname={!r}'.format(self.native_modname))
         return ', '.join(parts)
 
 
@@ -1314,6 +1663,12 @@ class DefinitionVisitor(ast.NodeVisitor, ub.NiceRepr):
                 visitor.nested_definitions[d.name] = d
         visitor.generic_visit(node)
 
+    def _make_absname(visitor, name):
+        if visitor.modname is not None:
+            return visitor.modname + '.' + name
+        else:
+            return name
+
     def _common_visit_assign(visitor, node, target):
         key = getattr(target, 'id', None)
         if key is not None:
@@ -1333,7 +1688,7 @@ class DefinitionVisitor(ast.NodeVisitor, ub.NiceRepr):
                 key, node, code=code, type='Assign',
                 modpath=visitor.modpath,
                 modname=visitor.modname,
-                absname=visitor.modname + '.' + key,
+                absname=visitor._make_absname(key),
                 native_modname=visitor.modname,
             )
             if visitor.level == 0:
@@ -1357,7 +1712,7 @@ class DefinitionVisitor(ast.NodeVisitor, ub.NiceRepr):
             node.name, node, type='FunctionDef',
             modpath=visitor.modpath,
             modname=visitor.modname,
-            absname=visitor.modname + '.' + node.name,
+            absname=visitor._make_absname(node.name),
             native_modname=visitor.modname,
         )
         if visitor.level == 0:
@@ -1379,7 +1734,7 @@ class DefinitionVisitor(ast.NodeVisitor, ub.NiceRepr):
             node.name, node, type='ClassDef',
             modpath=visitor.modpath,
             modname=visitor.modname,
-            absname=visitor.modname + '.' + node.name,
+            absname=visitor._make_absname(node.name),
             native_modname=visitor.modname,
         )
         if visitor.level == 0:
@@ -1492,7 +1847,7 @@ def _closefile(fpath, modnames):
     from xdoctest import static_analysis as static
     modpath = fpath
     expand_names = modnames
-    source = open(fpath, 'r').read()
+    source = ub.Path(fpath).read_text()
     calldefs = static.parse_calldefs(source, fpath)
     calldefs.pop('__doc__', None)
 
@@ -1512,3 +1867,144 @@ class Closer(Liberator):
     for backwards compatibility.
     """
     pass
+
+
+def remove_comments_and_docstrings(source):
+    r"""
+    Args:
+        source (str): uft8 text of source code
+
+    Returns:
+        str: out: the source with comments and docstrings removed.
+
+    References:
+        https://stackoverflow.com/questions/1769332/remove-comments-docstrings
+
+    Example:
+        >>> source = ub.codeblock(
+            '''
+            def foo():
+                'The spaces before this docstring are tokenize.INDENT'
+                test = [
+                    'The spaces before this string do not get a token'
+                ]
+            ''')
+        >>> out = remove_comments_and_docstrings(source)
+        >>> want = ub.codeblock(
+            '''
+            def foo():
+                pass
+                test = [
+                    'The spaces before this string do not get a token'
+                ]''').splitlines()
+        >>> got = [o.rstrip() for o in out.splitlines()]
+        >>> assert got == want
+
+
+        >>> source = ub.codeblock(
+            '''
+            def foo():
+                " docstring "
+            ''')
+        >>> out = remove_comments_and_docstrings(source)
+        >>> print(out)
+        >>> source = ub.codeblock(
+            '''
+            class foo():
+                r{qqq}
+                docstring
+                {qqq}
+            ''').format(qqq='"' * 3)
+        >>> out = remove_comments_and_docstrings(source)
+        >>> print(out)
+
+    """
+    import tokenize
+    source = ub.ensure_unicode(source)
+    io_obj = io.StringIO(source)
+    output_parts = []
+    prev_toktype = tokenize.INDENT
+    last_lineno = -1
+    last_col = 0
+    for tok in tokenize.generate_tokens(io_obj.readline):
+        token_type = tok[0]
+        token_string = tok[1]
+        start_line, start_col = tok[2]
+        end_line, end_col = tok[3]
+        # ltext = tok[4]
+        # The following two conditionals preserve indentation.
+        # This is necessary because we're not using tokenize.untokenize()
+        # (because it spits out code with copious amounts of oddly-placed
+        # whitespace).
+        if start_line > last_lineno:
+            last_col = 0
+        if start_col > last_col:
+            output_parts.append((' ' * (start_col - last_col)))
+        # Remove comments:
+        if token_type == tokenize.COMMENT:
+            pass
+        # This series of conditionals removes docstrings:
+        elif token_type == tokenize.STRING:
+            if prev_toktype != tokenize.INDENT:
+                # This is likely a docstring; double-check we're not inside an
+                # operator:
+                if prev_toktype != tokenize.NEWLINE:
+                    # Note regarding NEWLINE vs NL: The tokenize module
+                    # differentiates between newlines that start a new statement
+                    # and newlines inside of operators such as parens, brackes,
+                    # and curly braces.  Newlines inside of operators are
+                    # NEWLINE and newlines that start new code are NL.
+                    # Catch whole-module docstrings:
+                    if start_col > 0:
+                        # Unlabelled indentation means we're inside an operator
+                        output_parts.append(token_string)
+                    # Note regarding the INDENT token: The tokenize module does
+                    # not label indentation inside of an operator (parens,
+                    # brackets, and curly braces) as actual indentation.
+            else:
+                # NOTE: simply removing docstrings may create invalid code
+                # in cases where the only body is a docstring (e.g. a
+                # custom exception). Insert a pass to prevent this.  It
+                # would be nice to detect when this is necessary.
+                output_parts.append('pass')
+        else:
+            output_parts.append(token_string)
+        prev_toktype = token_type
+        last_col = end_col
+        last_lineno = end_line
+    out = ''.join(output_parts)
+    return out
+
+
+def remove_comments_and_docstrings2(source):
+    # https://stackoverflow.com/a/62074206/887074
+    import io, tokenize, re  # NOQA
+    io_obj = io.StringIO(source)
+    out = ""
+    prev_toktype = tokenize.INDENT
+    last_lineno = -1
+    last_col = 0
+    for tok in tokenize.generate_tokens(io_obj.readline):
+        token_type = tok[0]
+        token_string = tok[1]
+        start_line, start_col = tok[2]
+        end_line, end_col = tok[3]
+        ltext = tok[4]  # NOQA
+        if start_line > last_lineno:
+            last_col = 0
+        if start_col > last_col:
+            out += (" " * (start_col - last_col))
+        if token_type == tokenize.COMMENT:
+            pass
+        elif token_type == tokenize.STRING:
+            if prev_toktype != tokenize.INDENT:
+                if prev_toktype != tokenize.NEWLINE:
+                    if start_col > 0:
+                        out += token_string
+        else:
+            out += token_string
+        prev_toktype = token_type
+        last_col = end_col
+        last_lineno = end_line
+    out = '\n'.join(line for line in out.splitlines() if line.strip())
+    return out
